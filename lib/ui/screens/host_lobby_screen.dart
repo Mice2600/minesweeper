@@ -46,7 +46,7 @@ class _HostLobbyScreenState extends ConsumerState<HostLobbyScreen> {
 
     final players = s.snapshot?.players ?? const [];
     final firstUrl = s.hostUrls.isNotEmpty ? s.hostUrls.first : null;
-    final mode = GameMode.fromConfig(s.config, customSelected: _customSelected);
+    final mode = BoardPreset.fromConfig(s.config, customSelected: _customSelected);
 
     return Scaffold(
       appBar: AppBar(
@@ -122,7 +122,7 @@ class _HostLobbyScreenState extends ConsumerState<HostLobbyScreen> {
                     ),
                   ),
                   const SizedBox(height: 16),
-                  Text('Game Mode',
+                  Text('Board',
                       style: Theme.of(context).textTheme.titleMedium),
                   const SizedBox(height: 8),
                   ModePicker(
@@ -131,7 +131,7 @@ class _HostLobbyScreenState extends ConsumerState<HostLobbyScreen> {
                   ),
                   const SizedBox(height: 8),
                   _ModeSummary(config: s.config),
-                  if (mode == GameMode.custom) ...[
+                  if (mode == BoardPreset.custom) ...[
                     const SizedBox(height: 12),
                     CustomConfigEditor(
                       config: s.config,
@@ -140,6 +140,28 @@ class _HostLobbyScreenState extends ConsumerState<HostLobbyScreen> {
                       },
                     ),
                   ],
+                  const SizedBox(height: 20),
+                  Text('Rules',
+                      style: Theme.of(context).textTheme.titleMedium),
+                  const SizedBox(height: 8),
+                  _RulesPicker(
+                    mode: s.config.mode,
+                    hearts: s.config.initialHearts,
+                    onModeChanged: (m) {
+                      final hearts = m == GameMode.hearts ? 3 : 1;
+                      ref.read(sessionProvider.notifier).setConfig(
+                            s.config.copyWith(
+                              mode: m,
+                              initialHearts: hearts,
+                            ),
+                          );
+                    },
+                    onHeartsChanged: (h) {
+                      ref.read(sessionProvider.notifier).setConfig(
+                            s.config.copyWith(initialHearts: h),
+                          );
+                    },
+                  ),
                   const SizedBox(height: 24),
                   Text('Players (${players.length}/4)',
                       style: Theme.of(context).textTheme.titleMedium),
@@ -168,8 +190,8 @@ class _HostLobbyScreenState extends ConsumerState<HostLobbyScreen> {
     );
   }
 
-  void _onModeChanged(GameMode mode) {
-    setState(() => _customSelected = mode == GameMode.custom);
+  void _onModeChanged(BoardPreset mode) {
+    setState(() => _customSelected = mode == BoardPreset.custom);
     final preset = mode.toPresetConfig();
     if (preset != null) {
       ref.read(sessionProvider.notifier).setConfig(preset);
@@ -187,6 +209,76 @@ class _ModeSummary extends StatelessWidget {
     return Text(
       '${config.width}×${config.height} grid · ${config.mines} mines',
       style: TextStyle(color: cs.onSurfaceVariant, fontSize: 13),
+    );
+  }
+}
+
+class _RulesPicker extends StatelessWidget {
+  const _RulesPicker({
+    required this.mode,
+    required this.hearts,
+    required this.onModeChanged,
+    required this.onHeartsChanged,
+  });
+
+  final GameMode mode;
+  final int hearts;
+  final ValueChanged<GameMode> onModeChanged;
+  final ValueChanged<int> onHeartsChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SegmentedButton<GameMode>(
+          style: SegmentedButton.styleFrom(
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          ),
+          segments: const [
+            ButtonSegment(
+              value: GameMode.classic,
+              label: Text('Classic'),
+              icon: Icon(Icons.bolt_rounded),
+            ),
+            ButtonSegment(
+              value: GameMode.hearts,
+              label: Text('Lives'),
+              icon: Icon(Icons.favorite_rounded),
+            ),
+          ],
+          selected: {mode},
+          onSelectionChanged: (s) => onModeChanged(s.first),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          mode == GameMode.classic
+              ? 'One mine ends the game.'
+              : 'Team shares lives. Mines chain-explode through neighbours; '
+                  'each click on a mine costs one life.',
+          style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12),
+        ),
+        if (mode == GameMode.hearts) ...[
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              const Text('Lives',
+                  style: TextStyle(fontWeight: FontWeight.w600)),
+              const SizedBox(width: 12),
+              for (var n = 1; n <= 5; n++) ...[
+                ChoiceChip(
+                  label: Text('$n'),
+                  selected: hearts == n,
+                  onSelected: (_) => onHeartsChanged(n),
+                ),
+                const SizedBox(width: 6),
+              ],
+            ],
+          ),
+        ],
+      ],
     );
   }
 }

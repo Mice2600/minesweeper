@@ -173,6 +173,15 @@ class LanGameServer {
         if (out.cells.isNotEmpty) {
           _broadcast(SRevealed(cells: out.cells, byPlayerId: out.byPlayerId));
         }
+        if (out.heartLost) {
+          _broadcast(SHeartsChanged(
+            hearts: out.heartsRemaining,
+            byPlayerId: playerId,
+            x: out.triggerX,
+            y: out.triggerY,
+            explosionCenters: out.explosionCenters,
+          ));
+        }
         _checkGameEnd();
       case CFlag(:final x, :final y):
         final e = _engine;
@@ -192,6 +201,15 @@ class LanGameServer {
         final out = e.chord(x, y, playerId: playerId);
         if (out.cells.isNotEmpty) {
           _broadcast(SRevealed(cells: out.cells, byPlayerId: out.byPlayerId));
+        }
+        if (out.heartLost) {
+          _broadcast(SHeartsChanged(
+            hearts: out.heartsRemaining,
+            byPlayerId: playerId,
+            x: out.triggerX,
+            y: out.triggerY,
+            explosionCenters: out.explosionCenters,
+          ));
         }
         _checkGameEnd();
       case CCursor(:final nx, :final ny):
@@ -254,6 +272,7 @@ class LanGameServer {
       players: _players.values.toList(),
       status: _engine?.status ?? GameStatus.waiting,
       config: config,
+      hearts: _engine?.hearts ?? config.initialHearts,
     );
     _broadcast(lobby);
   }

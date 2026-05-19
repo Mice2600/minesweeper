@@ -101,7 +101,9 @@ class Board {
     if (root.isMine) {
       root.state = CellState.revealed;
       root.revealedBy = playerId;
-      _revealedCount++;
+      // Note: mines do NOT count toward _revealedCount — that counter only
+      // tracks non-mine reveals so that isWon() works in modes (like Hearts)
+      // where mines may be revealed without ending the game.
       return [Reveal(x: x, y: y, value: -1, isMine: true)];
     }
 
@@ -187,6 +189,102 @@ class Board {
     return _revealedCount >= cellCount - mineCount;
   }
 
+  /// True when every mine on the board has been revealed (detonated).
+  bool allMinesRevealed() {
+    if (!_minesPlaced) return false;
+    for (var y = 0; y < height; y++) {
+      for (var x = 0; x < width; x++) {
+        final c = cellAt(x, y);
+        if (c.isMine && !c.isRevealed) return false;
+      }
+    }
+    return true;
+  }
+
+  /// Reveals every hidden non-mine cell (clearing any flags). Returns the
+  /// list of Reveals so the network layer can broadcast them.
+  List<Reveal> revealAllHiddenNonMines({required String playerId}) {
+    final out = <Reveal>[];
+    for (var y = 0; y < height; y++) {
+      for (var x = 0; x < width; x++) {
+        final c = cellAt(x, y);
+        if (c.isMine || c.isRevealed) continue;
+        c.flaggedBy = null;
+        c.state = CellState.revealed;
+        c.revealedBy = playerId;
+        _revealedCount++;
+        out.add(Reveal(x: x, y: y, value: c.adjacentMines));
+      }
+    }
+    return out;
+  }
+
+  /// Hard cap on how many mines a single chain can detonate. Keeps a single
+  /// click from wiping out an arbitrarily large cluster.
+  static const chainMaxMines = 10;
+
+  /// Triggered when a mine at (startX, startY) detonates in Hearts mode.
+  /// Reveals its 3x3 neighborhood; any neighboring mine chain-detonates
+  /// recursively, up to [chainMaxMines]. Flags on chain-revealed cells are
+  /// cleared.
+  ChainExplosion chainExplode(int startX, int startY,
+      {required String playerId}) {
+    final reveals = <Reveal>[];
+    final centers = <List<int>>[];
+    final seen = <int>{};
+    final queue = <List<int>>[
+      [startX, startY]
+    ];
+
+    while (queue.isNotEmpty && centers.length < chainMaxMines) {
+      final pos = queue.removeAt(0);
+      final mx = pos[0];
+      final my = pos[1];
+      final mIdx = _index(mx, my);
+      if (seen.contains(mIdx)) continue;
+      seen.add(mIdx);
+
+      final mineCell = cellAt(mx, my);
+      if (!mineCell.isMine) continue;
+
+      if (!mineCell.isRevealed) {
+        mineCell.state = CellState.revealed;
+        mineCell.revealedBy = playerId;
+        mineCell.flaggedBy = null;
+        reveals.add(Reveal(x: mx, y: my, value: -1, isMine: true));
+      }
+      centers.add([mx, my]);
+
+      for (var dy = -1; dy <= 1; dy++) {
+        for (var dx = -1; dx <= 1; dx++) {
+          if (dx == 0 && dy == 0) continue;
+          final nx = mx + dx;
+          final ny = my + dy;
+          if (!inBounds(nx, ny)) continue;
+          final nIdx = _index(nx, ny);
+          if (seen.contains(nIdx)) continue;
+          final n = cellAt(nx, ny);
+          if (n.isRevealed) continue;
+
+          if (n.isMine) {
+            queue.add([nx, ny]);
+          } else {
+            if (n.isFlagged) {
+              n.state = CellState.hidden;
+              n.flaggedBy = null;
+            }
+            final r = reveal(nx, ny, playerId: playerId);
+            for (final rev in r) {
+              seen.add(_index(rev.x, rev.y));
+              reveals.add(rev);
+            }
+          }
+        }
+      }
+    }
+    return ChainExplosion(reveals: reveals, centers: centers);
+  }
+
   int get cellCount => width * height;
 
   List<List<int>> minePositions() {
@@ -198,6 +296,18 @@ class Board {
     }
     return out;
   }
+}
+
+class ChainExplosion {
+  const ChainExplosion({required this.reveals, required this.centers});
+
+  /// All cells revealed by the chain (mines AND adjacent non-mines).
+  final List<Reveal> reveals;
+
+  /// Positions of every mine that detonated, in detonation order.
+  final List<List<int>> centers;
+
+  bool get isEmpty => reveals.isEmpty;
 }
 
 class Reveal {

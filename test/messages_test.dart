@@ -67,6 +67,16 @@ void main() {
       const SCursor(playerId: 'h', nx: 0.1, ny: 0.9),
       const SEmoji(playerId: 'h', code: '👍'),
       const SError(code: 'oops', message: 'something happened'),
+      const SHeartsChanged(
+        hearts: 2,
+        byPlayerId: 'h',
+        x: 5,
+        y: 6,
+        explosionCenters: [
+          [5, 6],
+          [6, 6]
+        ],
+      ),
     ];
 
     for (final m in cases) {

@@ -5,6 +5,8 @@ import 'package:flutter/services.dart';
 
 import '../../state/session.dart';
 import 'cell_tile.dart';
+import 'explosion_overlay.dart';
+import 'explosion_timing.dart';
 
 typedef CellCb = void Function(int x, int y);
 typedef CursorCb = void Function(double nx, double ny);
@@ -35,10 +37,73 @@ class _BoardViewState extends State<BoardView> {
   final Set<int> _pulseIndices = {};
   Timer? _pulseTimer;
 
+  /// Per-cell-index timestamp (microsecondsSinceEpoch) at which a chain-
+  /// revealed cell should become visible. Cells revealed normally are not
+  /// in this map and render immediately.
+  final Map<int, int> _revealAt = {};
+  int _lastExplosionId = 0;
+  Timer? _chainTicker;
+
+  // Timing comes from the shared ExplosionTiming so cells and rings stay in
+  // lockstep.
+
   @override
   void dispose() {
     _pulseTimer?.cancel();
+    _chainTicker?.cancel();
     super.dispose();
+  }
+
+  @override
+  void didUpdateWidget(BoardView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _maybeScheduleChainReveal(oldWidget.snapshot, widget.snapshot);
+  }
+
+  void _maybeScheduleChainReveal(GameSnapshot oldSnap, GameSnapshot newSnap) {
+    final explosion = newSnap.lastExplosion;
+    if (explosion == null || explosion.id == _lastExplosionId) return;
+    _lastExplosionId = explosion.id;
+    final centers = explosion.centers;
+    if (centers.isEmpty) return;
+    final now = DateTime.now().microsecondsSinceEpoch;
+    // For every cell that just transitioned from hidden to revealed, compute
+    // when its ring would reach it.
+    final w = newSnap.width;
+    final cells = newSnap.cells;
+    final oldCells = oldSnap.cells;
+    final lenMatch = oldCells.length == cells.length;
+    for (var i = 0; i < cells.length; i++) {
+      if (lenMatch && oldCells[i] != -2) continue; // already revealed
+      if (cells[i] == -2) continue; // still hidden
+      final cx = i % w;
+      final cy = i ~/ w;
+      var bestMs = 1 << 30;
+      for (var k = 0; k < centers.length; k++) {
+        final dx = (cx - centers[k][0]).abs();
+        final dy = (cy - centers[k][1]).abs();
+        var cheb = dx > dy ? dx : dy;
+        if (cheb > ExplosionTiming.maxDistance) {
+          cheb = ExplosionTiming.maxDistance;
+        }
+        final delay = k * ExplosionTiming.msPerCenter +
+            cheb * ExplosionTiming.msPerDistance;
+        if (delay < bestMs) bestMs = delay;
+      }
+      if (bestMs > 0) {
+        _revealAt[i] = now + bestMs * 1000;
+      }
+    }
+    _chainTicker?.cancel();
+    _chainTicker = Timer.periodic(const Duration(milliseconds: 30), (_) {
+      final t = DateTime.now().microsecondsSinceEpoch;
+      _revealAt.removeWhere((_, due) => due <= t);
+      if (_revealAt.isEmpty) {
+        _chainTicker?.cancel();
+        _chainTicker = null;
+      }
+      if (mounted) setState(() {});
+    });
   }
 
   void _pulseNeighbors(int x, int y) {
@@ -122,7 +187,7 @@ class _BoardViewState extends State<BoardView> {
                           LayoutId(
                             id: y * w + x,
                             child: _AnimatedCell(
-                              value: widget.snapshot.cellAt(x, y),
+                              value: _displayValue(x, y),
                               flagColor: _flagColor(x, y),
                               size: cellSize,
                               highlight: _isLastEvent(x, y),
@@ -131,6 +196,14 @@ class _BoardViewState extends State<BoardView> {
                           ),
                     ],
                   ),
+                  if (widget.snapshot.lastExplosion != null)
+                    Positioned.fill(
+                      child: ExplosionOverlay(
+                        eventId: widget.snapshot.lastExplosion!.id,
+                        centers: widget.snapshot.lastExplosion!.centers,
+                        cellSize: cellSize,
+                      ),
+                    ),
                   ..._buildCursors(boardWidth, boardHeight),
                 ],
               ),
@@ -139,6 +212,19 @@ class _BoardViewState extends State<BoardView> {
         ),
       );
     });
+  }
+
+  /// Returns the value to render for cell (x,y) right now. If the cell is
+  /// being held back by an in-flight chain animation, returns -2 (hidden)
+  /// until its scheduled time arrives.
+  int _displayValue(int x, int y) {
+    final w = widget.snapshot.width;
+    final idx = y * w + x;
+    final due = _revealAt[idx];
+    if (due != null && DateTime.now().microsecondsSinceEpoch < due) {
+      return -2;
+    }
+    return widget.snapshot.cellAt(x, y);
   }
 
   Color? _flagColor(int x, int y) {

@@ -220,6 +220,7 @@ sealed class ServerMessage {
           status: GameStatus.values.byName(d['status'] as String),
           config: GameConfig.fromJson(
               (d['config'] as Map).cast<String, dynamic>()),
+          hearts: d['hearts'] as int? ?? 0,
         ),
       'gameStarted' => SGameStarted(
           config: GameConfig.fromJson(
@@ -263,9 +264,44 @@ sealed class ServerMessage {
         ),
       'error' =>
         SError(code: d['code'] as String, message: d['message'] as String),
+      'hearts' => SHeartsChanged(
+          hearts: d['hearts'] as int,
+          byPlayerId: d['byPlayerId'] as String,
+          x: d['x'] as int,
+          y: d['y'] as int,
+          explosionCenters: (d['centers'] as List)
+              .cast<List>()
+              .map((p) => [p[0] as int, p[1] as int])
+              .toList(),
+        ),
       _ => throw FormatException('unknown server message: $type'),
     };
   }
+}
+
+class SHeartsChanged extends ServerMessage {
+  const SHeartsChanged({
+    required this.hearts,
+    required this.byPlayerId,
+    required this.x,
+    required this.y,
+    this.explosionCenters = const [],
+  });
+  final int hearts;
+  final String byPlayerId;
+  final int x;
+  final int y;
+  final List<List<int>> explosionCenters;
+  @override
+  String get _type => 'hearts';
+  @override
+  Map<String, dynamic> _payload() => {
+        'hearts': hearts,
+        'byPlayerId': byPlayerId,
+        'x': x,
+        'y': y,
+        'centers': explosionCenters,
+      };
 }
 
 class SWelcome extends ServerMessage {
@@ -285,11 +321,13 @@ class SLobby extends ServerMessage {
     required this.players,
     required this.status,
     required this.config,
+    this.hearts = 0,
   });
   final String hostId;
   final List<PlayerInfo> players;
   final GameStatus status;
   final GameConfig config;
+  final int hearts;
   @override
   String get _type => 'lobby';
   @override
@@ -298,6 +336,7 @@ class SLobby extends ServerMessage {
         'players': players.map((p) => p.toJson()).toList(),
         'status': status.name,
         'config': config.toJson(),
+        'hearts': hearts,
       };
 }
 

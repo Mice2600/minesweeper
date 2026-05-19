@@ -11,22 +11,22 @@ class ModePicker extends StatelessWidget {
     required this.onChanged,
   });
 
-  final GameMode mode;
-  final ValueChanged<GameMode> onChanged;
+  final BoardPreset mode;
+  final ValueChanged<BoardPreset> onChanged;
 
   @override
   Widget build(BuildContext context) {
-    return SegmentedButton<GameMode>(
+    return SegmentedButton<BoardPreset>(
       style: SegmentedButton.styleFrom(
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(14),
         ),
       ),
       segments: const [
-        ButtonSegment(value: GameMode.easy, label: Text('Easy')),
-        ButtonSegment(value: GameMode.medium, label: Text('Medium')),
-        ButtonSegment(value: GameMode.hard, label: Text('Hard')),
-        ButtonSegment(value: GameMode.custom, label: Text('Custom')),
+        ButtonSegment(value: BoardPreset.easy, label: Text('Easy')),
+        ButtonSegment(value: BoardPreset.medium, label: Text('Medium')),
+        ButtonSegment(value: BoardPreset.hard, label: Text('Hard')),
+        ButtonSegment(value: BoardPreset.custom, label: Text('Custom')),
       ],
       selected: {mode},
       onSelectionChanged: (s) => onChanged(s.first),
@@ -34,33 +34,33 @@ class ModePicker extends StatelessWidget {
   }
 }
 
-enum GameMode {
+enum BoardPreset {
   easy,
   medium,
   hard,
   custom;
 
-  static GameMode fromConfig(GameConfig cfg, {required bool customSelected}) {
-    if (customSelected) return GameMode.custom;
+  static BoardPreset fromConfig(GameConfig cfg, {required bool customSelected}) {
+    if (customSelected) return BoardPreset.custom;
     for (final d in Difficulty.values) {
       if (d.width == cfg.width &&
           d.height == cfg.height &&
           d.mines == cfg.mines) {
         return switch (d) {
-          Difficulty.easy => GameMode.easy,
-          Difficulty.medium => GameMode.medium,
-          Difficulty.hard => GameMode.hard,
+          Difficulty.easy => BoardPreset.easy,
+          Difficulty.medium => BoardPreset.medium,
+          Difficulty.hard => BoardPreset.hard,
         };
       }
     }
-    return GameMode.custom;
+    return BoardPreset.custom;
   }
 
   GameConfig? toPresetConfig() => switch (this) {
-        GameMode.easy => GameConfig.fromDifficulty(Difficulty.easy),
-        GameMode.medium => GameConfig.fromDifficulty(Difficulty.medium),
-        GameMode.hard => GameConfig.fromDifficulty(Difficulty.hard),
-        GameMode.custom => null,
+        BoardPreset.easy => GameConfig.fromDifficulty(Difficulty.easy),
+        BoardPreset.medium => GameConfig.fromDifficulty(Difficulty.medium),
+        BoardPreset.hard => GameConfig.fromDifficulty(Difficulty.hard),
+        BoardPreset.custom => null,
       };
 }
 

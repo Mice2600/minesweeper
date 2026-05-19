@@ -7,12 +7,15 @@ import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import '../../audio/sfx.dart';
+import '../../game/difficulty.dart';
 import '../../game/engine.dart';
 import '../../state/session.dart';
 import '../widgets/avatar.dart';
 import '../widgets/board_view.dart';
 import '../widgets/emoji_bar.dart';
 import '../widgets/emoji_overlay.dart';
+import '../widgets/hearts_bar.dart';
+import '../widgets/screen_shake.dart';
 
 class GameScreen extends ConsumerStatefulWidget {
   const GameScreen({super.key});
@@ -52,13 +55,29 @@ class _GameScreenState extends ConsumerState<GameScreen> {
     ref.listen<SessionState>(sessionProvider, (prev, next) {
       final prevStatus = prev?.snapshot?.status;
       final nextStatus = next.snapshot?.status;
+      final prevHearts = prev?.snapshot?.hearts ?? -1;
+      final nextHearts = next.snapshot?.hearts ?? -1;
+      // Heart-loss explosion sound + haptic kick (Hearts mode).
+      if (prev?.snapshot != null &&
+          nextHearts >= 0 &&
+          nextHearts < prevHearts) {
+        ref.read(soundProvider).play(SfxKind.mine);
+        final chainLen = next.snapshot?.lastExplosion?.centers.length ?? 1;
+        HapticFeedback.heavyImpact();
+        // Extra kicks for long chains so the device feels the chain.
+        for (var k = 1; k < chainLen && k < 4; k++) {
+          Future.delayed(Duration(milliseconds: 80 * k), () {
+            HapticFeedback.mediumImpact();
+          });
+        }
+      }
       if (prevStatus != nextStatus &&
           (nextStatus == GameStatus.won ||
               nextStatus == GameStatus.lost)) {
         ref.read(soundProvider).play(
               nextStatus == GameStatus.won ? SfxKind.win : SfxKind.mine,
             );
-        Future.delayed(const Duration(milliseconds: 600), () {
+        Future.delayed(const Duration(milliseconds: 900), () {
           if (!context.mounted) return;
           context.go('/result');
         });
@@ -117,18 +136,29 @@ class _GameScreenState extends ConsumerState<GameScreen> {
       body: SafeArea(
         child: Column(
           children: [
+            if (snap.config.mode == GameMode.hearts)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: HeartsBar(
+                  current: snap.hearts,
+                  total: snap.initialHearts,
+                ),
+              ),
             _PlayersBar(players: snap.players, localId: s.localId),
             const SizedBox(height: 6),
             Expanded(
-              child: Stack(
-                children: [
-                  InteractiveViewer(
-                    minScale: 0.6,
-                    maxScale: 3.0,
-                    boundaryMargin: const EdgeInsets.all(40),
-                    child: Padding(
-                      padding: const EdgeInsets.all(12),
-                      child: BoardView(
+              child: ScreenShake(
+                triggerId: snap.lastExplosion?.id ?? 0,
+                magnitude: _shakeMagnitude(snap.lastExplosion?.centers.length ?? 0),
+                child: Stack(
+                  children: [
+                    InteractiveViewer(
+                      minScale: 0.6,
+                      maxScale: 3.0,
+                      boundaryMargin: const EdgeInsets.all(40),
+                      child: Padding(
+                        padding: const EdgeInsets.all(12),
+                        child: BoardView(
                         snapshot: snap,
                         interactive:
                             snap.status == GameStatus.playing ||
@@ -157,8 +187,9 @@ class _GameScreenState extends ConsumerState<GameScreen> {
                       ),
                     ),
                   ),
-                  const Positioned.fill(child: EmojiOverlay()),
-                ],
+                    const Positioned.fill(child: EmojiOverlay()),
+                  ],
+                ),
               ),
             ),
             Padding(
@@ -172,6 +203,12 @@ class _GameScreenState extends ConsumerState<GameScreen> {
         ),
       ),
     );
+  }
+
+  double _shakeMagnitude(int chainLength) {
+    if (chainLength <= 0) return 0;
+    // Base 6px for one mine, +3.5px per extra mine in the chain, capped at 28.
+    return (6 + (chainLength - 1) * 3.5).clamp(0, 28).toDouble();
   }
 
   void _throttledCursor(double nx, double ny) {
