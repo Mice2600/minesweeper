@@ -1,41 +1,28 @@
-import '../game/difficulty.dart';
 import 'messages.dart';
+import 'transport.dart';
 
-/// Web stub — hosting is not supported in the browser.
-class LanGameServer {
-  LanGameServer({
-    required this.hostName,
-    required this.hostAvatarSeed,
-    required this.config,
-  });
+/// Web stub — hosting via the embedded socket server is not supported in the
+/// browser. The relay-based [HostTransport] is the cross-platform path.
+class LanHostTransport implements HostTransport {
+  LanHostTransport();
 
-  String hostName;
-  String hostAvatarSeed;
-  GameConfig config;
-
-  Stream<ServerEvent> get events =>
-      const Stream<ServerEvent>.empty();
-
-  String get hostId => '';
   int get port => 0;
-  Iterable<PlayerInfo> get players => const [];
 
-  Future<void> start() async {
-    throw UnsupportedError('Hosting is not supported on web.');
+  @override
+  Stream<HostTransportEvent> get events =>
+      const Stream<HostTransportEvent>.empty();
+
+  @override
+  Future<HostJoinInfo> start() async {
+    throw UnsupportedError('LAN hosting is not supported on web.');
   }
 
+  @override
   Future<void> stop() async {}
 
-  void onLocalIntent(ClientMessage _) {}
-  void setConfig(GameConfig _) {}
-  void startGame() {}
-  void restart() {}
-  void broadcastLobby() {}
-}
+  @override
+  void sendToGuest(String _, ServerMessage __) {}
 
-/// Event emitted by the server for the host UI to react to (e.g. show its own
-/// pieces of the game). The host's own intents go through [LanGameServer.onLocalIntent].
-class ServerEvent {
-  const ServerEvent(this.message);
-  final ServerMessage message;
+  @override
+  void broadcast(ServerMessage _, {String? excludePlayerId}) {}
 }

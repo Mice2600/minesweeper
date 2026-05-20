@@ -74,6 +74,7 @@ class GameEngine {
     if (_status != GameStatus.playing) return RevealOutcome.empty;
     final cells = _board.chord(x, y, playerId: playerId);
     if (cells.isEmpty) return RevealOutcome.empty;
+    _statsFor(playerId).chordMoves++;
     return _processReveal(cells, x, y, playerId);
   }
 
@@ -87,6 +88,7 @@ class GameEngine {
     String playerId,
   ) {
     final stats = _statsFor(playerId);
+    final beforeRevealed = stats.cellsRevealed;
     final allCells = List<Reveal>.from(initialCells);
     final explosionCenters = <List<int>>[];
     var mineHit = false;
@@ -98,6 +100,7 @@ class GameEngine {
         stats.cellsRevealed++;
       }
     }
+    if (mineHit) stats.minesHit++;
 
     if (mineHit) {
       if (config.mode == GameMode.hearts && _hearts > 0) {
@@ -139,6 +142,17 @@ class GameEngine {
       _endedAt = DateTime.now();
     }
 
+    final delta = stats.cellsRevealed - beforeRevealed;
+    if (delta > stats.largestCascade) stats.largestCascade = delta;
+    stats.clicks++;
+    final start = _startedAt;
+    if (start != null) {
+      final tMs = DateTime.now().difference(start).inMilliseconds;
+      stats.timeline.add(
+        TimelineEvent(tMs: tMs, revealed: delta, mineHit: mineHit),
+      );
+    }
+
     return RevealOutcome(
       cells: allCells,
       byPlayerId: playerId,
@@ -162,18 +176,85 @@ class GameEngine {
 }
 
 class PlayerStats {
-  PlayerStats({this.cellsRevealed = 0, this.flagsPlaced = 0});
+  PlayerStats({
+    this.cellsRevealed = 0,
+    this.flagsPlaced = 0,
+    this.correctFlags = 0,
+    this.incorrectFlags = 0,
+    this.minesHit = 0,
+    this.chordMoves = 0,
+    this.largestCascade = 0,
+    this.clicks = 0,
+    List<TimelineEvent>? timeline,
+  }) : timeline = timeline ?? <TimelineEvent>[];
+
   int cellsRevealed;
   int flagsPlaced;
+  int correctFlags;
+  int incorrectFlags;
+  int minesHit;
+  int chordMoves;
+  int largestCascade;
+  int clicks;
+  final List<TimelineEvent> timeline;
 
   Map<String, dynamic> toJson() => {
         'cellsRevealed': cellsRevealed,
         'flagsPlaced': flagsPlaced,
+        'correctFlags': correctFlags,
+        'incorrectFlags': incorrectFlags,
+        'minesHit': minesHit,
+        'chordMoves': chordMoves,
+        'largestCascade': largestCascade,
+        'clicks': clicks,
+        'timeline': timeline.map((e) => e.toJson()).toList(),
       };
 
   factory PlayerStats.fromJson(Map<String, dynamic> json) => PlayerStats(
         cellsRevealed: json['cellsRevealed'] as int? ?? 0,
         flagsPlaced: json['flagsPlaced'] as int? ?? 0,
+        correctFlags: json['correctFlags'] as int? ?? 0,
+        incorrectFlags: json['incorrectFlags'] as int? ?? 0,
+        minesHit: json['minesHit'] as int? ?? 0,
+        chordMoves: json['chordMoves'] as int? ?? 0,
+        largestCascade: json['largestCascade'] as int? ?? 0,
+        clicks: json['clicks'] as int? ?? 0,
+        timeline: ((json['timeline'] as List?) ?? const [])
+            .cast<Map>()
+            .map((m) => TimelineEvent.fromJson(m.cast<String, dynamic>()))
+            .toList(),
+      );
+}
+
+/// One per `reveal`/`chord` action by a player. Used by the post-game line
+/// chart to render cumulative reveals over match time.
+class TimelineEvent {
+  const TimelineEvent({
+    required this.tMs,
+    required this.revealed,
+    this.mineHit = false,
+  });
+
+  /// Milliseconds since game start.
+  final int tMs;
+
+  /// Non-mine cells uncovered by this action (includes flood-fill and Hearts
+  /// chain-explosion fallout).
+  final int revealed;
+
+  /// Whether this action tripped a mine.
+  final bool mineHit;
+
+  Map<String, dynamic> toJson() => {
+        't': tMs,
+        'n': revealed,
+        if (mineHit) 'm': true,
+      };
+
+  factory TimelineEvent.fromJson(Map<String, dynamic> json) => TimelineEvent(
+        tMs: json['t'] as int? ?? 0,
+        revealed: json['n'] as int? ?? 0,
+        mineHit: json['m'] as bool? ?? false,
       );
 }
 

@@ -14,3 +14,10 @@ A few resources to get you started if this is your first Flutter project:
 For help getting started with Flutter development, view the
 [online documentation](https://docs.flutter.dev/), which offers tutorials,
 samples, guidance on mobile development, and a full API reference.
+
+
+
+flutter build windows --release --dart-define=RELAY_URL=wss://minesweeper-relay.lacon.workers.dev
+
+
+flutter build apk --release --dart-define=RELAY_URL=wss://minesweeper-relay.lacon.workers.dev

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:qr_flutter/qr_flutter.dart';
@@ -9,7 +10,9 @@ import '../widgets/difficulty_picker.dart';
 import '../widgets/player_chip.dart';
 
 class HostLobbyScreen extends ConsumerStatefulWidget {
-  const HostLobbyScreen({super.key});
+  const HostLobbyScreen({super.key, this.mode = HostMode.lan});
+
+  final HostMode mode;
 
   @override
   ConsumerState<HostLobbyScreen> createState() => _HostLobbyScreenState();
@@ -28,15 +31,16 @@ class _HostLobbyScreenState extends ConsumerState<HostLobbyScreen> {
     final s = ref.read(sessionProvider);
     if (s.connectionState != SessionConnState.idle) return;
     final p = ref.read(localProfileProvider);
-    await ref
-        .read(sessionProvider.notifier)
-        .startHost(name: p.name, avatarSeed: p.avatarSeed);
+    await ref.read(sessionProvider.notifier).startHost(
+          name: p.name,
+          avatarSeed: p.avatarSeed,
+          mode: widget.mode,
+        );
   }
 
   @override
   Widget build(BuildContext context) {
     final s = ref.watch(sessionProvider);
-    final cs = Theme.of(context).colorScheme;
 
     ref.listen<SessionState>(sessionProvider, (prev, next) {
       if (next.connectionState == SessionConnState.playing) {
@@ -68,59 +72,10 @@ class _HostLobbyScreenState extends ConsumerState<HostLobbyScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Card(
-                    child: Padding(
-                      padding: const EdgeInsets.all(20),
-                      child: Column(
-                        children: [
-                          if (firstUrl != null)
-                            Container(
-                              padding: const EdgeInsets.all(12),
-                              decoration: BoxDecoration(
-                                color: Colors.white,
-                                borderRadius: BorderRadius.circular(16),
-                              ),
-                              child: QrImageView(
-                                data: firstUrl,
-                                size: 180,
-                                backgroundColor: Colors.white,
-                                eyeStyle: const QrEyeStyle(
-                                  eyeShape: QrEyeShape.square,
-                                  color: Colors.black,
-                                ),
-                              ),
-                            ),
-                          const SizedBox(height: 12),
-                          Text(
-                            'Tell others to scan or enter:',
-                            style: TextStyle(color: cs.onSurfaceVariant),
-                          ),
-                          const SizedBox(height: 8),
-                          if (s.hostUrls.isEmpty)
-                            Text('Server on port ${s.hostPort}',
-                                style: const TextStyle(
-                                    fontFamily: 'monospace',
-                                    fontWeight: FontWeight.w600))
-                          else
-                            ...s.hostUrls.map(
-                              (u) => Padding(
-                                padding:
-                                    const EdgeInsets.symmetric(vertical: 2),
-                                child: SelectableText(
-                                  u,
-                                  textAlign: TextAlign.center,
-                                  style: const TextStyle(
-                                    fontFamily: 'monospace',
-                                    fontWeight: FontWeight.w600,
-                                    fontSize: 13,
-                                  ),
-                                ),
-                              ),
-                            ),
-                        ],
-                      ),
-                    ),
-                  ),
+                  if (widget.mode == HostMode.online)
+                    _OnlineRoomCard(roomCode: s.roomCode)
+                  else
+                    _LanRoomCard(urls: s.hostUrls, firstUrl: firstUrl, port: s.hostPort),
                   const SizedBox(height: 16),
                   Text('Board',
                       style: Theme.of(context).textTheme.titleMedium),
@@ -197,6 +152,141 @@ class _HostLobbyScreenState extends ConsumerState<HostLobbyScreen> {
       ref.read(sessionProvider.notifier).setConfig(preset);
     }
     // For Custom, keep whatever config is currently set so sliders start there.
+  }
+}
+
+class _OnlineRoomCard extends StatelessWidget {
+  const _OnlineRoomCard({required this.roomCode});
+  final String? roomCode;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final code = roomCode;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          children: [
+            Text('Room code', style: TextStyle(color: cs.onSurfaceVariant)),
+            const SizedBox(height: 8),
+            if (code == null)
+              const SizedBox(
+                height: 56,
+                child: Center(child: CircularProgressIndicator()),
+              )
+            else
+              SelectableText(
+                code,
+                style: const TextStyle(
+                  fontFamily: 'monospace',
+                  fontWeight: FontWeight.w800,
+                  fontSize: 36,
+                  letterSpacing: 6,
+                ),
+              ),
+            const SizedBox(height: 12),
+            Text(
+              'Share this 5-character code with friends so they can join from anywhere.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12),
+            ),
+            const SizedBox(height: 12),
+            if (code != null)
+              Wrap(
+                spacing: 8,
+                children: [
+                  OutlinedButton.icon(
+                    onPressed: () async {
+                      await Clipboard.setData(ClipboardData(text: code));
+                      if (!context.mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Code copied'),
+                          duration: Duration(seconds: 1),
+                        ),
+                      );
+                    },
+                    icon: const Icon(Icons.copy_rounded),
+                    label: const Text('Copy'),
+                  ),
+                ],
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _LanRoomCard extends StatelessWidget {
+  const _LanRoomCard({
+    required this.urls,
+    required this.firstUrl,
+    required this.port,
+  });
+  final List<String> urls;
+  final String? firstUrl;
+  final int port;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          children: [
+            if (firstUrl != null)
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: QrImageView(
+                  data: firstUrl!,
+                  size: 180,
+                  backgroundColor: Colors.white,
+                  eyeStyle: const QrEyeStyle(
+                    eyeShape: QrEyeShape.square,
+                    color: Colors.black,
+                  ),
+                ),
+              ),
+            const SizedBox(height: 12),
+            Text(
+              'Tell others on this Wi-Fi to scan or enter:',
+              style: TextStyle(color: cs.onSurfaceVariant),
+            ),
+            const SizedBox(height: 8),
+            if (urls.isEmpty)
+              Text(
+                'Server on port $port',
+                style: const TextStyle(
+                  fontFamily: 'monospace',
+                  fontWeight: FontWeight.w600,
+                ),
+              )
+            else
+              ...urls.map(
+                (u) => Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 2),
+                  child: SelectableText(
+                    u,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      fontFamily: 'monospace',
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13,
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
   }
 }
 

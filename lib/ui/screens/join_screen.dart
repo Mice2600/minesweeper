@@ -6,8 +6,13 @@ import '../../state/session.dart';
 import '../widgets/player_chip.dart';
 
 class JoinScreen extends ConsumerStatefulWidget {
-  const JoinScreen({super.key, required this.initialUrl});
-  final String initialUrl;
+  const JoinScreen({super.key, this.lanUrl, this.roomCode});
+
+  /// LAN: full `ws://ip:port` URL.
+  final String? lanUrl;
+
+  /// Online: 5-char relay room code.
+  final String? roomCode;
 
   @override
   ConsumerState<JoinScreen> createState() => _JoinScreenState();
@@ -22,11 +27,25 @@ class _JoinScreenState extends ConsumerState<JoinScreen> {
 
   Future<void> _connect() async {
     final p = ref.read(localProfileProvider);
+    final notifier = ref.read(sessionProvider.notifier);
+    final code = widget.roomCode;
+    final url = widget.lanUrl;
     try {
-      final uri = Uri.parse(widget.initialUrl);
-      await ref
-          .read(sessionProvider.notifier)
-          .joinHost(uri: uri, name: p.name, avatarSeed: p.avatarSeed);
+      if (code != null && code.isNotEmpty) {
+        await notifier.joinHost(
+          mode: JoinMode.online,
+          roomCode: code,
+          name: p.name,
+          avatarSeed: p.avatarSeed,
+        );
+      } else if (url != null && url.isNotEmpty) {
+        await notifier.joinHost(
+          mode: JoinMode.lan,
+          lanUri: Uri.parse(url),
+          name: p.name,
+          avatarSeed: p.avatarSeed,
+        );
+      }
     } catch (_) {}
   }
 

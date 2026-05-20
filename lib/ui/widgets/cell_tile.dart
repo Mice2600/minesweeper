@@ -7,6 +7,8 @@ class CellTile extends StatelessWidget {
     required this.value, // -2 hidden, -1 mine, 0..8 number
     required this.flagColor,
     required this.size,
+    required this.x,
+    required this.y,
     this.highlight = false,
   });
 
@@ -14,37 +16,50 @@ class CellTile extends StatelessWidget {
   final int value;
   final Color? flagColor;
   final double size;
+  final int x;
+  final int y;
   final bool highlight;
+
+  // Google-Minesweeper grass / dirt checkerboard.
+  static const _hiddenLight = Color(0xFFAAD751);
+  static const _hiddenDark = Color(0xFFA2D149);
+  static const _hiddenHover = Color(0xFFBFE17D);
+  static const _hiddenEdge = Color(0xFF8ECC39);
+  static const _revealedLight = Color(0xFFE5C29F);
+  static const _revealedDark = Color(0xFFD7B899);
+  static const _revealedEdge = Color(0xFFBA9978);
+  static const _mineBg = Color(0xFFDB3236);
 
   static const _numberColors = <Color>[
     Colors.transparent,
-    Color(0xFF1565C0), // 1 blue
-    Color(0xFF2E7D32), // 2 green
-    Color(0xFFC62828), // 3 red
-    Color(0xFF6A1B9A), // 4 purple
-    Color(0xFF6D4C41), // 5 brown
-    Color(0xFF00838F), // 6 cyan
-    Color(0xFF424242), // 7 grey
-    Color(0xFFD81B60), // 8 pink
+    Color(0xFF1976D2), // 1 blue
+    Color(0xFF388E3C), // 2 green
+    Color(0xFFD32F2F), // 3 red
+    Color(0xFF7B1FA2), // 4 purple
+    Color(0xFFFF8F00), // 5 orange
+    Color(0xFF0097A7), // 6 teal
+    Color(0xFF424242), // 7 dark grey
+    Color(0xFFC2185B), // 8 pink
   ];
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
     final hidden = value == -2;
     final isMine = value == -1;
+    final even = (x + y).isEven;
 
-    final bg = hidden
-        ? (highlight
-            ? cs.primaryContainer
-            : cs.surfaceContainerHigh)
-        : isMine
-            ? cs.errorContainer
-            : cs.surface;
+    final Color bg;
+    if (hidden) {
+      bg = highlight
+          ? _hiddenHover
+          : (even ? _hiddenLight : _hiddenDark);
+    } else if (isMine) {
+      bg = _mineBg;
+    } else {
+      bg = even ? _revealedLight : _revealedDark;
+    }
 
-    final border = hidden
-        ? cs.outlineVariant
-        : cs.outlineVariant.withValues(alpha: 0.4);
+    final edge = hidden ? _hiddenEdge : _revealedEdge;
 
     Widget content;
     if (hidden && flagColor != null) {
@@ -52,17 +67,28 @@ class CellTile extends StatelessWidget {
         Icons.flag_rounded,
         color: flagColor,
         size: size * 0.6,
+        shadows: const [
+          Shadow(
+            color: Color(0x55000000),
+            blurRadius: 1.5,
+            offset: Offset(0.8, 0.8),
+          ),
+        ],
       );
     } else if (isMine) {
-      content = Icon(Icons.brightness_low_rounded,
-          color: cs.error, size: size * 0.6);
+      content = Icon(
+        Icons.brightness_low_rounded,
+        color: Colors.black87,
+        size: size * 0.7,
+      );
     } else if (value > 0) {
       content = Text(
         '$value',
         style: GoogleFonts.jetBrainsMono(
-          fontSize: size * 0.55,
-          fontWeight: FontWeight.w800,
+          fontSize: size * 0.62,
+          fontWeight: FontWeight.w900,
           color: _numberColors[value],
+          height: 1.0,
         ),
       );
     } else {
@@ -70,12 +96,11 @@ class CellTile extends StatelessWidget {
     }
 
     return AnimatedContainer(
-      duration: const Duration(milliseconds: 160),
+      duration: const Duration(milliseconds: 140),
       curve: Curves.easeOut,
       decoration: BoxDecoration(
         color: bg,
-        border: Border.all(color: border, width: 0.5),
-        borderRadius: BorderRadius.circular(size * 0.18),
+        border: Border.all(color: edge, width: 0.5),
       ),
       alignment: Alignment.center,
       child: content,

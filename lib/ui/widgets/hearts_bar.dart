@@ -21,7 +21,7 @@ class HeartsBar extends StatelessWidget {
       children: [
         for (var i = 0; i < total; i++)
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 2),
+            padding: const EdgeInsets.symmetric(horizontal: 4),
             child: _Heart(
               key: ValueKey('h$i'),
               filled: i < current,
@@ -45,7 +45,7 @@ class _Heart extends StatelessWidget {
     final icon = Icon(
       filled ? Icons.favorite_rounded : Icons.heart_broken_rounded,
       color: color,
-      size: 22,
+      size: 36,
     );
     if (isLastLost && !filled) {
       // Shake on heart loss.

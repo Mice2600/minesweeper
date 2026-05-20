@@ -3,6 +3,7 @@ import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../net/relay_config.dart';
 import '../../state/session.dart';
 
 class HomeScreen extends ConsumerWidget {
@@ -39,7 +40,7 @@ class HomeScreen extends ConsumerWidget {
                       .slideY(begin: 0.15, end: 0),
                   const SizedBox(height: 6),
                   Text(
-                    'Co-op on your local Wi-Fi',
+                    'Co-op Minesweeper, online or on Wi-Fi',
                     textAlign: TextAlign.center,
                     style: TextStyle(color: cs.onSurfaceVariant),
                   ),
@@ -51,18 +52,41 @@ class HomeScreen extends ConsumerWidget {
                         .setName(v),
                   ),
                   const SizedBox(height: 24),
-                  FilledButton.icon(
-                    onPressed: () => context.go('/host'),
-                    icon: const Icon(Icons.wifi_tethering_rounded),
-                    label: const Text('Host a game'),
-                  ),
-                  const SizedBox(height: 12),
+                  if (relayIsConfigured) ...[
+                    FilledButton.icon(
+                      onPressed: () => context.go('/host?mode=online'),
+                      icon: const Icon(Icons.public_rounded),
+                      label: const Text('Host online'),
+                    ),
+                    const SizedBox(height: 12),
+                  ],
                   OutlinedButton.icon(
                     onPressed: () => context.go('/browse'),
-                    icon: const Icon(Icons.search_rounded),
+                    icon: const Icon(Icons.login_rounded),
                     label: const Text('Join a game'),
                   ),
-                  const SizedBox(height: 12),
+                  if (!relayIsConfigured) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      'Online play needs a relay URL. Build with\n'
+                      '--dart-define=RELAY_URL=wss://your-relay.workers.dev',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                          color: cs.onSurfaceVariant, fontSize: 11),
+                    ),
+                  ],
+                  const SizedBox(height: 24),
+                  Text('On the same Wi-Fi?',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                          color: cs.onSurfaceVariant, fontSize: 12)),
+                  const SizedBox(height: 8),
+                  TextButton.icon(
+                    onPressed: () => context.go('/host'),
+                    icon: const Icon(Icons.wifi_tethering_rounded),
+                    label: const Text('Host on Wi-Fi'),
+                  ),
+                  const SizedBox(height: 4),
                   TextButton.icon(
                     onPressed: () => _startSolo(ref, context),
                     icon: const Icon(Icons.person_outline),

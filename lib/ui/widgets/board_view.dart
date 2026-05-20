@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -15,18 +16,25 @@ class BoardView extends StatefulWidget {
   const BoardView({
     super.key,
     required this.snapshot,
+    required this.cellSize,
     required this.onReveal,
     required this.onFlag,
     required this.onChord,
     required this.onCursor,
+    required this.onCursorLeave,
     this.interactive = true,
   });
 
   final GameSnapshot snapshot;
+
+  /// Pixel size of a single cell. Sized by the parent so the layout can be
+  /// computed once with full visibility of viewport insets, padding, etc.
+  final double cellSize;
   final CellCb onReveal;
   final CellCb onFlag;
   final CellCb onChord;
   final CursorCb onCursor;
+  final VoidCallback onCursorLeave;
   final bool interactive;
 
   @override
@@ -135,29 +143,46 @@ class _BoardViewState extends State<BoardView> {
 
   @override
   Widget build(BuildContext context) {
-    return LayoutBuilder(builder: (context, constraints) {
-      final w = widget.snapshot.width;
-      final h = widget.snapshot.height;
-      const minCell = 28.0;
-      const maxCell = 56.0;
-      final wantW = constraints.maxWidth / w;
-      final wantH = constraints.maxHeight / h;
-      final cell = wantW.isFinite && wantH.isFinite
-          ? wantW.clamp(minCell, maxCell).toDouble()
-          : minCell;
-      final cellSize =
-          wantH.isFinite ? cell.clamp(minCell, wantH).toDouble() : cell;
+    final w = widget.snapshot.width;
+    final h = widget.snapshot.height;
+    final cellSize = widget.cellSize;
+    final boardWidth = cellSize * w;
+    final boardHeight = cellSize * h;
 
-      final boardWidth = cellSize * w;
-      final boardHeight = cellSize * h;
-
-      return Center(
-        child: SizedBox(
-          width: boardWidth,
-          height: boardHeight,
-          child: MouseRegion(
+    return SizedBox(
+      width: boardWidth,
+      height: boardHeight,
+      child: Listener(
+        onPointerDown: widget.interactive
+            ? (e) {
+                if (e.kind != PointerDeviceKind.touch) return;
+                _emitCursor(e.localPosition, boardWidth, boardHeight);
+              }
+            : null,
+        onPointerMove: widget.interactive
+            ? (e) {
+                if (e.kind != PointerDeviceKind.touch) return;
+                _emitCursor(e.localPosition, boardWidth, boardHeight);
+              }
+            : null,
+        onPointerUp: widget.interactive
+            ? (e) {
+                if (e.kind != PointerDeviceKind.touch) return;
+                widget.onCursorLeave();
+              }
+            : null,
+        onPointerCancel: widget.interactive
+            ? (e) {
+                if (e.kind != PointerDeviceKind.touch) return;
+                widget.onCursorLeave();
+              }
+            : null,
+        child: MouseRegion(
             onHover: widget.interactive
                 ? (e) => _emitCursor(e.localPosition, boardWidth, boardHeight)
+                : null,
+            onExit: widget.interactive
+                ? (_) => widget.onCursorLeave()
                 : null,
             child: GestureDetector(
               behavior: HitTestBehavior.opaque,
@@ -187,6 +212,8 @@ class _BoardViewState extends State<BoardView> {
                           LayoutId(
                             id: y * w + x,
                             child: _AnimatedCell(
+                              x: x,
+                              y: y,
                               value: _displayValue(x, y),
                               flagColor: _flagColor(x, y),
                               size: cellSize,
@@ -211,7 +238,6 @@ class _BoardViewState extends State<BoardView> {
           ),
         ),
       );
-    });
   }
 
   /// Returns the value to render for cell (x,y) right now. If the cell is
@@ -304,12 +330,16 @@ class _GridLayout extends MultiChildLayoutDelegate {
 
 class _AnimatedCell extends StatelessWidget {
   const _AnimatedCell({
+    required this.x,
+    required this.y,
     required this.value,
     required this.flagColor,
     required this.size,
     required this.highlight,
     required this.pulsing,
   });
+  final int x;
+  final int y;
   final int value;
   final Color? flagColor;
   final double size;
@@ -317,27 +347,13 @@ class _AnimatedCell extends StatelessWidget {
   final bool pulsing;
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return AnimatedScale(
-      scale: pulsing ? 0.84 : (highlight ? 1.06 : 1.0),
-      duration: Duration(milliseconds: pulsing ? 120 : 200),
-      curve: Curves.easeOutBack,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        margin: const EdgeInsets.all(1.5),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(size * 0.18),
-          color: pulsing
-              ? cs.primary.withValues(alpha: 0.25)
-              : Colors.transparent,
-        ),
-        child: CellTile(
-          value: value,
-          flagColor: flagColor,
-          size: size,
-          highlight: highlight || pulsing,
-        ),
-      ),
+    return CellTile(
+      x: x,
+      y: y,
+      value: value,
+      flagColor: flagColor,
+      size: size,
+      highlight: highlight || pulsing,
     );
   }
 }

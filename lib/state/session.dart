@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math';
 
+import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/ids.dart';
@@ -10,7 +11,10 @@ import '../net/client.dart';
 import '../net/discovery.dart';
 import '../net/local_ip.dart';
 import '../net/messages.dart';
+import '../net/relay_transport.dart';
 import '../net/server.dart';
+import '../net/transport.dart';
+import 'host_session.dart';
 
 /// All UI-facing game state derived from server messages.
 class GameSnapshot {
@@ -28,6 +32,8 @@ class GameSnapshot {
     required this.stats,
     required this.hearts,
     this.lastExplosion,
+    this.startedAtMs = 0,
+    this.endedAtMs = 0,
   });
 
   final GameConfig config;
@@ -57,6 +63,17 @@ class GameSnapshot {
 
   /// Most recent chain-explosion event for animation.
   final ({int x, int y, List<List<int>> centers, int id})? lastExplosion;
+
+  /// Epoch-ms when the active game started. 0 until the host broadcasts the
+  /// final SGameOver carrying authoritative timing.
+  final int startedAtMs;
+
+  /// Epoch-ms when the game ended. 0 while still playing.
+  final int endedAtMs;
+
+  /// Total match duration in ms (0 until game ends).
+  int get durationMs =>
+      (endedAtMs > 0 && startedAtMs > 0) ? endedAtMs - startedAtMs : 0;
 
   GameMode get mode => config.mode;
   int get initialHearts => config.initialHearts;
@@ -99,6 +116,8 @@ class GameSnapshot {
     int? hearts,
     ({int x, int y, List<List<int>> centers, int id})? lastExplosion,
     bool clearLastExplosion = false,
+    int? startedAtMs,
+    int? endedAtMs,
   }) =>
       GameSnapshot(
         config: config ?? this.config,
@@ -115,8 +134,13 @@ class GameSnapshot {
         hearts: hearts ?? this.hearts,
         lastExplosion:
             clearLastExplosion ? null : (lastExplosion ?? this.lastExplosion),
+        startedAtMs: startedAtMs ?? this.startedAtMs,
+        endedAtMs: endedAtMs ?? this.endedAtMs,
       );
 }
+
+enum HostMode { lan, online }
+enum JoinMode { lan, online }
 
 /// Captures everything about the current play session: am I host or guest,
 /// who's connected, and the latest game state.
@@ -130,6 +154,7 @@ class SessionState {
     required this.errorMessage,
     required this.hostUrls,
     required this.hostPort,
+    required this.roomCode,
   });
 
   factory SessionState.idle() => SessionState(
@@ -141,6 +166,7 @@ class SessionState {
         errorMessage: null,
         hostUrls: const [],
         hostPort: 0,
+        roomCode: null,
       );
 
   final GameConfig config;
@@ -150,9 +176,12 @@ class SessionState {
   final SessionConnState connectionState;
   final String? errorMessage;
 
-  /// For host: URLs derived from local IPs (for QR / manual entry).
+  /// For LAN host: URLs derived from local IPs (for QR / manual entry).
   final List<String> hostUrls;
   final int hostPort;
+
+  /// For online host: short room code to share with friends.
+  final String? roomCode;
 
   SessionState copyWith({
     GameConfig? config,
@@ -163,8 +192,10 @@ class SessionState {
     String? errorMessage,
     List<String>? hostUrls,
     int? hostPort,
+    String? roomCode,
     bool clearSnapshot = false,
     bool clearError = false,
+    bool clearRoomCode = false,
   }) =>
       SessionState(
         config: config ?? this.config,
@@ -175,31 +206,86 @@ class SessionState {
         errorMessage: clearError ? null : (errorMessage ?? this.errorMessage),
         hostUrls: hostUrls ?? this.hostUrls,
         hostPort: hostPort ?? this.hostPort,
+        roomCode: clearRoomCode ? null : (roomCode ?? this.roomCode),
       );
 }
 
-enum SessionConnState { idle, connecting, lobby, playing, ended, disconnected }
+enum SessionConnState {
+  idle,
+  connecting,
+  lobby,
+  playing,
+  ended,
+  reconnecting,
+  disconnected,
+}
 
 final sessionProvider =
     NotifierProvider<SessionNotifier, SessionState>(SessionNotifier.new);
 
+class _SessionLifecycleObserver extends WidgetsBindingObserver {
+  _SessionLifecycleObserver(this.onResume);
+  final VoidCallback onResume;
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) onResume();
+  }
+}
+
 class SessionNotifier extends Notifier<SessionState> {
-  LanGameServer? _server;
-  LanGameClient? _client;
+  HostSession? _host;
+  GuestTransport? _guest;
   DiscoveryAdvertiser? _advertiser;
-  StreamSubscription? _msgSub;
-  StreamSubscription? _serverEventSub;
+  StreamSubscription? _guestSub;
+  StreamSubscription? _hostLocalSub;
+
+  // ─── Reconnect bookkeeping (guest side) ─────────────────────────────────
+  // Set once on first joinHost(); carried verbatim across reconnect attempts
+  // so the host can recognize this as the same player via [_rejoinToken] and
+  // restore their slot/stats inside its grace window.
+  String? _joinName;
+  String? _joinAvatarSeed;
+  JoinMode? _joinMode;
+  Uri? _joinLanUri;
+  String? _joinRoomCode;
+  String? _rejoinToken;
+  int _reconnectAttempt = 0;
+  Timer? _reconnectTimer;
+  static const _reconnectBackoffSecs = <int>[1, 2, 4, 8, 8, 8];
 
   @override
   SessionState build() {
+    final observer = _SessionLifecycleObserver(_onAppResumed);
+    WidgetsBinding.instance.addObserver(observer);
     ref.onDispose(() async {
-      await _msgSub?.cancel();
-      await _serverEventSub?.cancel();
-      await _client?.close();
+      WidgetsBinding.instance.removeObserver(observer);
+      _reconnectTimer?.cancel();
+      _reconnectTimer = null;
+      await _guestSub?.cancel();
+      await _hostLocalSub?.cancel();
+      await _guest?.close();
       await _advertiser?.stop();
-      await _server?.stop();
+      await _host?.stop();
     });
     return SessionState.idle();
+  }
+
+  /// Called when the OS reports the app has come back to the foreground.
+  /// On mobile this is the typical "woke up from sleep" signal — if we were
+  /// in a reconnect backoff we cut the wait short and try right now, and if
+  /// we had given up (disconnected) we restart the loop from attempt 0.
+  void _onAppResumed() {
+    if (_joinMode == null) return;
+    final cs = state.connectionState;
+    if (cs == SessionConnState.reconnecting) {
+      _reconnectTimer?.cancel();
+      _reconnectTimer = null;
+      _attemptConnect(isFirst: false);
+    } else if (cs == SessionConnState.disconnected) {
+      _reconnectAttempt = 0;
+      _attemptConnect(isFirst: false);
+    }
   }
 
   // ─── Hosting ───────────────────────────────────────────────────────────────
@@ -208,59 +294,78 @@ class SessionNotifier extends Notifier<SessionState> {
     required String name,
     required String avatarSeed,
     Difficulty difficulty = Difficulty.easy,
+    HostMode mode = HostMode.lan,
   }) async {
     state = state.copyWith(
       isHost: true,
       connectionState: SessionConnState.connecting,
       clearError: true,
+      clearRoomCode: true,
     );
 
     final cfg = GameConfig.fromDifficulty(difficulty);
-    final server = LanGameServer(
+    final HostTransport transport = switch (mode) {
+      HostMode.lan => LanHostTransport(),
+      HostMode.online => RelayHostTransport(),
+    };
+    final session = HostSession(
       hostName: name,
       hostAvatarSeed: avatarSeed,
       config: cfg,
+      transport: transport,
     );
+
+    _hostLocalSub = session.localEvents.listen(_handleServerMessage);
+
+    final HostJoinInfo info;
     try {
-      await server.start();
+      info = await session.start();
     } catch (e) {
+      await session.stop();
+      await _hostLocalSub?.cancel();
+      _hostLocalSub = null;
       state = state.copyWith(
         connectionState: SessionConnState.idle,
-        errorMessage: 'Failed to start host: $e',
+        errorMessage: e is RelayJoinException
+            ? e.userMessage
+            : 'Failed to start host: $e',
       );
       return;
     }
-    _server = server;
+    _host = session;
 
     final urls = <String>[];
-    final ips = await getLocalIPv4Addresses();
-    for (final ip in ips) {
-      urls.add('ws://$ip:${server.port}');
+    var port = 0;
+    String? roomCode;
+    if (info.kind == HostJoinKind.lan) {
+      port = info.lanPort ?? 0;
+      final ips = await getLocalIPv4Addresses();
+      for (final ip in ips) {
+        urls.add('ws://$ip:$port');
+      }
+      _advertiser = DiscoveryAdvertiser(
+        serviceName: 'Minesweeper-${name.isEmpty ? 'Host' : name}',
+        port: port,
+      );
+      unawaited(_advertiser!.start());
+    } else {
+      roomCode = info.roomCode;
     }
 
-    _advertiser = DiscoveryAdvertiser(
-      serviceName: 'Minesweeper-${name.isEmpty ? 'Host' : name}',
-      port: server.port,
-    );
-    unawaited(_advertiser!.start());
-
     state = state.copyWith(
-      localId: server.hostId,
+      localId: session.hostId,
       config: cfg,
       hostUrls: urls,
-      hostPort: server.port,
+      hostPort: port,
+      roomCode: roomCode,
       connectionState: SessionConnState.lobby,
     );
-
-    _serverEventSub =
-        server.events.listen((e) => _handleServerMessage(e.message));
-    // The initial broadcast inside server.start() happened before we
-    // subscribed; re-broadcast now so this client receives its own lobby.
-    server.broadcastLobby();
+    // Re-broadcast lobby so this subscriber sees the initial state.
+    session.broadcastLobby();
   }
 
   void hostStartGame() {
-    final s = _server;
+    final s = _host;
     if (s == null) return;
     s.onLocalIntent(CStartGame(config: state.config));
   }
@@ -269,47 +374,164 @@ class SessionNotifier extends Notifier<SessionState> {
 
   void setConfig(GameConfig cfg) {
     state = state.copyWith(config: cfg);
-    final s = _server;
-    if (s != null) {
-      s.config = cfg;
-      s.broadcastLobby();
-    }
+    _host?.setConfig(cfg);
   }
 
   // ─── Joining ───────────────────────────────────────────────────────────────
 
   Future<void> joinHost({
-    required Uri uri,
     required String name,
     required String avatarSeed,
+    JoinMode mode = JoinMode.lan,
+    Uri? lanUri,
+    String? roomCode,
   }) async {
-    state = state.copyWith(
-      isHost: false,
-      connectionState: SessionConnState.connecting,
-      clearError: true,
-    );
-    try {
-      final c = await LanGameClient.connect(uri);
-      _client = c;
-      c.send(CJoin(name: name, avatarSeed: avatarSeed));
-      _msgSub = c.messages.listen(_handleServerMessage,
-          onError: (e) {
-            state = state.copyWith(
-              connectionState: SessionConnState.disconnected,
-              errorMessage: 'Connection error: $e',
-            );
-          },
-          onDone: () {
-            state = state.copyWith(
-              connectionState: SessionConnState.disconnected,
-            );
-          });
-    } catch (e) {
+    // Validate params before mutating state or stashing them for reconnect.
+    if (mode == JoinMode.lan && lanUri == null) {
       state = state.copyWith(
         connectionState: SessionConnState.idle,
-        errorMessage: 'Failed to connect: $e',
+        errorMessage: 'Missing LAN address',
       );
+      return;
     }
+    String? normalizedRoomCode;
+    if (mode == JoinMode.online) {
+      normalizedRoomCode = (roomCode ?? '')
+          .toUpperCase()
+          .replaceAll(RegExp(r'[^0-9A-Z]'), '');
+      if (normalizedRoomCode.isEmpty) {
+        state = state.copyWith(
+          connectionState: SessionConnState.idle,
+          errorMessage: 'Enter a room code',
+        );
+        return;
+      }
+    }
+
+    _joinName = name;
+    _joinAvatarSeed = avatarSeed;
+    _joinMode = mode;
+    _joinLanUri = lanUri;
+    _joinRoomCode = normalizedRoomCode;
+    _rejoinToken = shortId(20);
+    _reconnectAttempt = 0;
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+
+    await _attemptConnect(isFirst: true);
+  }
+
+  /// Builds a fresh [GuestTransport] from the saved join params and attaches
+  /// the session's event listener. Used both for the initial join and for
+  /// every reconnect attempt — the only externally visible difference is the
+  /// connection-state value while in flight.
+  Future<void> _attemptConnect({required bool isFirst}) async {
+    final mode = _joinMode;
+    final name = _joinName;
+    final avatarSeed = _joinAvatarSeed;
+    if (mode == null || name == null || avatarSeed == null) return;
+
+    // Reset any prior transport before we open a new one.
+    await _guestSub?.cancel();
+    _guestSub = null;
+    await _guest?.close();
+    _guest = null;
+
+    state = state.copyWith(
+      isHost: false,
+      connectionState: isFirst
+          ? SessionConnState.connecting
+          : SessionConnState.reconnecting,
+      clearError: true,
+    );
+
+    final GuestTransport transport;
+    switch (mode) {
+      case JoinMode.lan:
+        transport = LanGuestTransport(_joinLanUri!);
+      case JoinMode.online:
+        transport = RelayGuestTransport(roomCode: _joinRoomCode!);
+    }
+
+    try {
+      await transport.connect();
+      _guest = transport;
+      transport.send(CJoin(
+        name: name,
+        avatarSeed: avatarSeed,
+        rejoinToken: _rejoinToken,
+      ));
+      // Cleared once the join is acknowledged so the next drop starts at 1s.
+      _reconnectAttempt = 0;
+      _guestSub = transport.events.listen(
+        _handleServerMessage,
+        onError: (e) => _handleTransportDown('Connection error: $e'),
+        onDone: () => _handleTransportDown(null),
+      );
+    } catch (e) {
+      try {
+        await transport.close();
+      } catch (_) {}
+      if (isFirst) {
+        // First attempt failed before the session was ever established —
+        // surface the error to the UI and reset rather than retrying silently.
+        _clearReconnectState();
+        state = state.copyWith(
+          connectionState: SessionConnState.idle,
+          errorMessage: e is RelayJoinException
+              ? e.userMessage
+              : 'Failed to connect: $e',
+        );
+      } else {
+        _scheduleReconnect();
+      }
+    }
+  }
+
+  void _handleTransportDown(String? errMsg) {
+    // Don't fight the user's explicit leave().
+    if (_joinMode == null) return;
+    // If the game already wrapped up on the host side, treat the close as
+    // expected and don't try to reconnect into a finished session.
+    if (state.connectionState == SessionConnState.ended) return;
+
+    state = state.copyWith(
+      connectionState: SessionConnState.reconnecting,
+      errorMessage: errMsg,
+    );
+    _scheduleReconnect();
+  }
+
+  void _scheduleReconnect() {
+    if (_joinMode == null) return;
+    if (_reconnectAttempt >= _reconnectBackoffSecs.length) {
+      _clearReconnectState();
+      state = state.copyWith(
+        connectionState: SessionConnState.disconnected,
+        errorMessage: state.errorMessage ??
+            'Could not reconnect — check your network and rejoin.',
+      );
+      return;
+    }
+    final delaySecs = _reconnectBackoffSecs[_reconnectAttempt];
+    _reconnectAttempt++;
+    _reconnectTimer?.cancel();
+    _reconnectTimer = Timer(Duration(seconds: delaySecs), () {
+      _reconnectTimer = null;
+      _attemptConnect(isFirst: false);
+    });
+  }
+
+  void _clearReconnectState() {
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+    _reconnectAttempt = 0;
+    _joinName = null;
+    _joinAvatarSeed = null;
+    _joinMode = null;
+    _joinLanUri = null;
+    _joinRoomCode = null;
+    _rejoinToken = null;
   }
 
   // ─── Common: send intents ──────────────────────────────────────────────────
@@ -318,32 +540,34 @@ class SessionNotifier extends Notifier<SessionState> {
   void sendFlag(int x, int y) => _send(CFlag(x: x, y: y));
   void sendChord(int x, int y) => _send(CChord(x: x, y: y));
   void sendCursor(double nx, double ny) => _send(CCursor(nx: nx, ny: ny));
+  void clearCursor() => _send(const CCursorLeave());
   void sendEmoji(String code) => _send(CEmoji(code: code));
   void sendReady(bool ready) => _send(CReady(ready: ready));
   void sendRestart() => _send(const CRestart());
 
   void _send(ClientMessage msg) {
-    final s = _server;
-    if (s != null) {
-      s.onLocalIntent(msg);
+    final h = _host;
+    if (h != null) {
+      h.onLocalIntent(msg);
       return;
     }
-    _client?.send(msg);
+    _guest?.send(msg);
   }
 
   // ─── Outbound disconnect ───────────────────────────────────────────────────
 
   Future<void> leave() async {
-    await _msgSub?.cancel();
-    _msgSub = null;
-    await _serverEventSub?.cancel();
-    _serverEventSub = null;
-    await _client?.close();
-    _client = null;
+    _clearReconnectState();
+    await _guestSub?.cancel();
+    _guestSub = null;
+    await _hostLocalSub?.cancel();
+    _hostLocalSub = null;
+    await _guest?.close();
+    _guest = null;
     await _advertiser?.stop();
     _advertiser = null;
-    await _server?.stop();
-    _server = null;
+    await _host?.stop();
+    _host = null;
     state = SessionState.idle();
   }
 
@@ -431,7 +655,9 @@ class SessionNotifier extends Notifier<SessionState> {
           :final won,
           :final losingPlayerId,
           :final minePositions,
-          :final stats
+          :final stats,
+          :final startedAtMs,
+          :final endedAtMs,
         ):
         if (snap == null) return;
         final newCells = List<int>.from(snap.cells);
@@ -446,6 +672,8 @@ class SessionNotifier extends Notifier<SessionState> {
             minePositions: minePositions,
             losingPlayerId: losingPlayerId,
             stats: stats,
+            startedAtMs: startedAtMs,
+            endedAtMs: endedAtMs,
           ),
           connectionState: SessionConnState.ended,
         );
@@ -476,10 +704,85 @@ class SessionNotifier extends Notifier<SessionState> {
             Map<String, ({double nx, double ny})>.from(snap.cursors);
         newCursors[playerId] = (nx: nx, ny: ny);
         state = state.copyWith(snapshot: snap.copyWith(cursors: newCursors));
+      case SCursorLeave(:final playerId):
+        if (snap == null) return;
+        if (playerId == state.localId) return;
+        if (!snap.cursors.containsKey(playerId)) return;
+        final newCursors =
+            Map<String, ({double nx, double ny})>.from(snap.cursors);
+        newCursors.remove(playerId);
+        state = state.copyWith(snapshot: snap.copyWith(cursors: newCursors));
       case SEmoji(:final playerId, :final code):
         ref.read(emojiBurstProvider.notifier).push(playerId, code);
       case SError(:final message):
         state = state.copyWith(errorMessage: message);
+      case SPong():
+        // Heartbeat ack is normally filtered inside the guest transport, but
+        // a stray pong over LAN would still need a no-op case so the
+        // exhaustive switch keeps compiling.
+        return;
+      case SSnapshot(
+          :final cells,
+          :final flags,
+          :final hearts,
+          :final stats,
+          :final rejoinToken,
+        ):
+        if (snap == null) return;
+        if (rejoinToken != null) _rejoinToken = rejoinToken;
+        final newCells = List<int>.filled(snap.width * snap.height, -2);
+        final width = snap.width;
+        // Sized snapshots from the host always match the lobby config we
+        // were just told about; if not we conservatively skip the cell wipe.
+        if (cells.length == newCells.length) {
+          for (var i = 0; i < cells.length; i++) {
+            newCells[i] = cells[i];
+          }
+        }
+        final newFlags = List<String?>.filled(snap.width * snap.height, null);
+        for (final f in flags) {
+          final idx = f.y * width + f.x;
+          if (idx >= 0 && idx < newFlags.length) {
+            newFlags[idx] = f.by;
+          }
+        }
+        state = state.copyWith(
+          snapshot: snap.copyWith(
+            cells: newCells,
+            flags: newFlags,
+            hearts: hearts,
+            stats: stats,
+          ),
+          connectionState: SessionConnState.playing,
+        );
+      case SHostAway():
+        // Host dropped its socket but the relay is holding the room open
+        // inside its grace window. Keep our snapshot intact, just surface a
+        // "reconnecting" badge so the UI explains why moves aren't landing.
+        state = state.copyWith(
+          connectionState: SessionConnState.reconnecting,
+        );
+      case SHostBack():
+        // Host reclaimed. For the host's own UI, restore the connection
+        // state based on whether a game is in progress so the
+        // "reconnecting" banner clears immediately. For a guest, re-send
+        // CJoin with the saved rejoin token — the host fast-paths it back
+        // into the existing PlayerInfo slot and replies with a fresh
+        // SSnapshot, which will tip state back to `playing` on its own.
+        final restored = state.snapshot?.status == GameStatus.playing
+            ? SessionConnState.playing
+            : SessionConnState.lobby;
+        state = state.copyWith(connectionState: restored);
+        final token = _rejoinToken;
+        final name = _joinName;
+        final avatarSeed = _joinAvatarSeed;
+        if (name != null && avatarSeed != null) {
+          _guest?.send(CJoin(
+            name: name,
+            avatarSeed: avatarSeed,
+            rejoinToken: token,
+          ));
+        }
     }
   }
 

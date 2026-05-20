@@ -5,7 +5,7 @@ import '../game/difficulty.dart';
 import '../game/engine.dart';
 
 /// Protocol version. Bump on breaking change.
-const protocolVersion = 1;
+const protocolVersion = 3;
 
 // ───────────────────────────────────────── Player ─────────────────────────────
 
@@ -17,6 +17,7 @@ class PlayerInfo {
     required this.color,
     this.isHost = false,
     this.isReady = false,
+    this.isOffline = false,
   });
 
   final String id;
@@ -26,12 +27,17 @@ class PlayerInfo {
   final bool isHost;
   final bool isReady;
 
+  /// True while this player has dropped the socket but the host is still
+  /// holding their slot inside the rejoin grace window.
+  final bool isOffline;
+
   PlayerInfo copyWith({
     String? name,
     String? avatarSeed,
     int? color,
     bool? isHost,
     bool? isReady,
+    bool? isOffline,
   }) =>
       PlayerInfo(
         id: id,
@@ -40,6 +46,7 @@ class PlayerInfo {
         color: color ?? this.color,
         isHost: isHost ?? this.isHost,
         isReady: isReady ?? this.isReady,
+        isOffline: isOffline ?? this.isOffline,
       );
 
   Map<String, dynamic> toJson() => {
@@ -49,6 +56,7 @@ class PlayerInfo {
         'color': color,
         'isHost': isHost,
         'isReady': isReady,
+        'isOffline': isOffline,
       };
 
   factory PlayerInfo.fromJson(Map<String, dynamic> j) => PlayerInfo(
@@ -58,6 +66,7 @@ class PlayerInfo {
         color: j['color'] as int,
         isHost: j['isHost'] as bool? ?? false,
         isReady: j['isReady'] as bool? ?? false,
+        isOffline: j['isOffline'] as bool? ?? false,
       );
 }
 
@@ -79,7 +88,9 @@ sealed class ClientMessage {
       'join' => CJoin(
           name: d['name'] as String,
           avatarSeed: d['avatarSeed'] as String,
+          rejoinToken: d['rejoinToken'] as String?,
         ),
+      'ping' => const CPing(),
       'ready' => CReady(ready: d['ready'] as bool),
       'startGame' => CStartGame(
           config: GameConfig.fromJson(
@@ -90,6 +101,7 @@ sealed class ClientMessage {
       'chord' => CChord(x: d['x'] as int, y: d['y'] as int),
       'cursor' =>
         CCursor(nx: (d['nx'] as num).toDouble(), ny: (d['ny'] as num).toDouble()),
+      'cursorLeave' => const CCursorLeave(),
       'emoji' => CEmoji(code: d['code'] as String),
       'restart' => const CRestart(),
       'leave' => const CLeave(),
@@ -99,14 +111,36 @@ sealed class ClientMessage {
 }
 
 class CJoin extends ClientMessage {
-  const CJoin({required this.name, required this.avatarSeed});
+  const CJoin({
+    required this.name,
+    required this.avatarSeed,
+    this.rejoinToken,
+  });
   final String name;
   final String avatarSeed;
+
+  /// Optional token. When present and known to the host, the join is treated
+  /// as a reconnect: the player keeps their previous id, color, and stats.
+  final String? rejoinToken;
+
   @override
   String get _type => 'join';
   @override
-  Map<String, dynamic> _payload() =>
-      {'name': name, 'avatarSeed': avatarSeed};
+  Map<String, dynamic> _payload() => {
+        'name': name,
+        'avatarSeed': avatarSeed,
+        if (rejoinToken != null) 'rejoinToken': rejoinToken,
+      };
+}
+
+/// Liveness ping from guest → host. The host replies with [SPong] immediately
+/// (see [HostSession]) so each side can detect a silently dead socket.
+class CPing extends ClientMessage {
+  const CPing();
+  @override
+  String get _type => 'ping';
+  @override
+  Map<String, dynamic> _payload() => const {};
 }
 
 class CReady extends ClientMessage {
@@ -165,6 +199,14 @@ class CCursor extends ClientMessage {
   String get _type => 'cursor';
   @override
   Map<String, dynamic> _payload() => {'nx': nx, 'ny': ny};
+}
+
+class CCursorLeave extends ClientMessage {
+  const CCursorLeave();
+  @override
+  String get _type => 'cursorLeave';
+  @override
+  Map<String, dynamic> _payload() => const {};
 }
 
 class CEmoji extends ClientMessage {
@@ -252,12 +294,16 @@ sealed class ServerMessage {
             (k, v) => MapEntry(
                 k as String, PlayerStats.fromJson((v as Map).cast<String, dynamic>())),
           ),
+          startedAtMs: d['startedAtMs'] as int? ?? 0,
+          endedAtMs: d['endedAtMs'] as int? ?? 0,
         ),
       'cursor' => SCursor(
           playerId: d['playerId'] as String,
           nx: (d['nx'] as num).toDouble(),
           ny: (d['ny'] as num).toDouble(),
         ),
+      'cursorLeave' =>
+        SCursorLeave(playerId: d['playerId'] as String),
       'emoji' => SEmoji(
           playerId: d['playerId'] as String,
           code: d['code'] as String,
@@ -273,6 +319,27 @@ sealed class ServerMessage {
               .cast<List>()
               .map((p) => [p[0] as int, p[1] as int])
               .toList(),
+        ),
+      'pong' => const SPong(),
+      'hostAway' => const SHostAway(),
+      'hostBack' => const SHostBack(),
+      'snapshot' => SSnapshot(
+          cells: (d['cells'] as List).cast<int>(),
+          flags: (d['flags'] as List)
+              .cast<Map>()
+              .map((m) => FlagEntry(
+                    x: m['x'] as int,
+                    y: m['y'] as int,
+                    by: m['by'] as String,
+                  ))
+              .toList(),
+          hearts: d['hearts'] as int? ?? 0,
+          stats: (d['stats'] as Map).map(
+            (k, v) => MapEntry(
+                k as String,
+                PlayerStats.fromJson((v as Map).cast<String, dynamic>())),
+          ),
+          rejoinToken: d['rejoinToken'] as String?,
         ),
       _ => throw FormatException('unknown server message: $type'),
     };
@@ -400,11 +467,19 @@ class SGameOver extends ServerMessage {
     required this.losingPlayerId,
     required this.minePositions,
     required this.stats,
+    this.startedAtMs = 0,
+    this.endedAtMs = 0,
   });
   final bool won;
   final String? losingPlayerId;
   final List<List<int>> minePositions;
   final Map<String, PlayerStats> stats;
+
+  /// Epoch-ms when the game started. 0 if unknown (e.g. legacy clients).
+  final int startedAtMs;
+
+  /// Epoch-ms when the game ended. 0 if unknown.
+  final int endedAtMs;
   @override
   String get _type => 'gameOver';
   @override
@@ -413,6 +488,8 @@ class SGameOver extends ServerMessage {
         'losingPlayerId': losingPlayerId,
         'minePositions': minePositions,
         'stats': stats.map((k, v) => MapEntry(k, v.toJson())),
+        'startedAtMs': startedAtMs,
+        'endedAtMs': endedAtMs,
       };
 }
 
@@ -430,6 +507,15 @@ class SCursor extends ServerMessage {
   @override
   Map<String, dynamic> _payload() =>
       {'playerId': playerId, 'nx': nx, 'ny': ny};
+}
+
+class SCursorLeave extends ServerMessage {
+  const SCursorLeave({required this.playerId});
+  final String playerId;
+  @override
+  String get _type => 'cursorLeave';
+  @override
+  Map<String, dynamic> _payload() => {'playerId': playerId};
 }
 
 class SEmoji extends ServerMessage {
@@ -450,4 +536,84 @@ class SError extends ServerMessage {
   String get _type => 'error';
   @override
   Map<String, dynamic> _payload() => {'code': code, 'message': message};
+}
+
+/// Host's reply to [CPing]. Lets the guest's watchdog confirm the socket is
+/// still alive end-to-end (not just at the TCP layer).
+class SPong extends ServerMessage {
+  const SPong();
+  @override
+  String get _type => 'pong';
+  @override
+  Map<String, dynamic> _payload() => const {};
+}
+
+/// Synthesized by the relay guest transport when the relay reports the host
+/// has dropped its socket. The session uses this to show a "reconnecting"
+/// banner without tearing down the local snapshot — the room is still alive
+/// inside the host-grace window.
+class SHostAway extends ServerMessage {
+  const SHostAway();
+  @override
+  String get _type => 'hostAway';
+  @override
+  Map<String, dynamic> _payload() => const {};
+}
+
+/// Counterpart to [SHostAway]: the host has reclaimed the room. The session
+/// re-sends [CJoin] with the saved rejoin token so the host can fast-path it
+/// back into its [PlayerInfo] slot and reply with a fresh [SSnapshot].
+class SHostBack extends ServerMessage {
+  const SHostBack();
+  @override
+  String get _type => 'hostBack';
+  @override
+  Map<String, dynamic> _payload() => const {};
+}
+
+/// One flagged cell carried by [SSnapshot].
+class FlagEntry {
+  const FlagEntry({required this.x, required this.y, required this.by});
+  final int x;
+  final int y;
+  final String by;
+
+  Map<String, dynamic> toJson() => {'x': x, 'y': y, 'by': by};
+}
+
+/// Full mid-game board catchup. Sent by the host to a guest that just
+/// (re)joined while a game is in progress, so they can replace their stale
+/// local snapshot with authoritative state. Lobby/player list arrive via the
+/// regular [SLobby] broadcast that precedes this message.
+class SSnapshot extends ServerMessage {
+  const SSnapshot({
+    required this.cells,
+    required this.flags,
+    required this.hearts,
+    required this.stats,
+    this.rejoinToken,
+  });
+
+  /// width * height entries: -2 hidden, -1 mine, 0..8 number. Same encoding
+  /// as `GameSnapshot.cells`.
+  final List<int> cells;
+  final List<FlagEntry> flags;
+  final int hearts;
+  final Map<String, PlayerStats> stats;
+
+  /// Echoes back the token the host has on file for this player (whether
+  /// freshly minted or reused on a rejoin). Guests store it for the next
+  /// reconnect attempt.
+  final String? rejoinToken;
+
+  @override
+  String get _type => 'snapshot';
+  @override
+  Map<String, dynamic> _payload() => {
+        'cells': cells,
+        'flags': flags.map((f) => f.toJson()).toList(),
+        'hearts': hearts,
+        'stats': stats.map((k, v) => MapEntry(k, v.toJson())),
+        if (rejoinToken != null) 'rejoinToken': rejoinToken,
+      };
 }
