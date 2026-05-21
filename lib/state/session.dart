@@ -5,6 +5,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/ids.dart';
+import '../game/board.dart';
 import '../game/difficulty.dart';
 import '../game/engine.dart';
 import '../net/client.dart';
@@ -25,6 +26,7 @@ class GameSnapshot {
     required this.status,
     required this.cells,
     required this.flags,
+    required this.questions,
     required this.lastEvent,
     required this.cursors,
     required this.minePositions,
@@ -46,6 +48,10 @@ class GameSnapshot {
 
   /// width * height entries: playerId of flag, or null.
   final List<String?> flags;
+
+  /// width * height entries: playerId of "?" mark, or null. Mutually
+  /// exclusive with [flags] per cell — flag → question → none is the cycle.
+  final List<String?> questions;
 
   /// Last (x,y) flash for animations, or null.
   final ({int x, int y, String byPlayer})? lastEvent;
@@ -83,6 +89,7 @@ class GameSnapshot {
 
   int cellAt(int x, int y) => cells[y * width + x];
   String? flagAt(int x, int y) => flags[y * width + x];
+  String? questionAt(int x, int y) => questions[y * width + x];
 
   PlayerInfo? playerById(String? id) {
     if (id == null) return null;
@@ -107,6 +114,7 @@ class GameSnapshot {
     GameStatus? status,
     List<int>? cells,
     List<String?>? flags,
+    List<String?>? questions,
     ({int x, int y, String byPlayer})? lastEvent,
     bool clearLastEvent = false,
     Map<String, ({double nx, double ny})>? cursors,
@@ -126,6 +134,7 @@ class GameSnapshot {
         status: status ?? this.status,
         cells: cells ?? this.cells,
         flags: flags ?? this.flags,
+        questions: questions ?? this.questions,
         lastEvent: clearLastEvent ? null : (lastEvent ?? this.lastEvent),
         cursors: cursors ?? this.cursors,
         minePositions: minePositions ?? this.minePositions,
@@ -628,27 +637,36 @@ class SessionNotifier extends Notifier<SessionState> {
         if (snap == null) return;
         final newCells = List<int>.from(snap.cells);
         final newFlags = List<String?>.from(snap.flags);
+        final newQuestions = List<String?>.from(snap.questions);
         for (final r in cells) {
           final idx = r.y * snap.width + r.x;
           newCells[idx] = r.value;
           newFlags[idx] = null;
+          newQuestions[idx] = null;
         }
         final last = cells.isNotEmpty
             ? (x: cells.last.x, y: cells.last.y, byPlayer: byPlayerId)
             : snap.lastEvent;
         state = state.copyWith(
-          snapshot: _withCellsAndFlags(snap, newCells, newFlags, last),
+          snapshot: snap.copyWith(
+            cells: newCells,
+            flags: newFlags,
+            questions: newQuestions,
+            lastEvent: last,
+          ),
         );
-      case SFlagged(:final x, :final y, :final flagged, :final byPlayerId):
+      case SFlagged(:final x, :final y, :final mark, :final byPlayerId):
         if (snap == null) return;
+        final idx = y * snap.width + x;
         final newFlags = List<String?>.from(snap.flags);
-        newFlags[y * snap.width + x] = flagged ? byPlayerId : null;
+        final newQuestions = List<String?>.from(snap.questions);
+        newFlags[idx] = mark == CellMark.flag ? byPlayerId : null;
+        newQuestions[idx] = mark == CellMark.question ? byPlayerId : null;
         state = state.copyWith(
-          snapshot: _withCellsAndFlags(
-            snap,
-            snap.cells,
-            newFlags,
-            (x: x, y: y, byPlayer: byPlayerId),
+          snapshot: snap.copyWith(
+            flags: newFlags,
+            questions: newQuestions,
+            lastEvent: (x: x, y: y, byPlayer: byPlayerId),
           ),
         );
       case SGameOver(
@@ -786,14 +804,6 @@ class SessionNotifier extends Notifier<SessionState> {
     }
   }
 
-  GameSnapshot _withCellsAndFlags(
-    GameSnapshot snap,
-    List<int> cells,
-    List<String?> flags,
-    ({int x, int y, String byPlayer})? last,
-  ) =>
-      snap.copyWith(cells: cells, flags: flags, lastEvent: last);
-
   GameSnapshot _emptySnapshot(
     GameConfig cfg,
     String hostId,
@@ -808,6 +818,7 @@ class SessionNotifier extends Notifier<SessionState> {
         status: status,
         cells: List<int>.filled(cfg.width * cfg.height, -2),
         flags: List<String?>.filled(cfg.width * cfg.height, null),
+        questions: List<String?>.filled(cfg.width * cfg.height, null),
         lastEvent: null,
         cursors: const {},
         minePositions: const [],

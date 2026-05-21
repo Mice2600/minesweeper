@@ -108,11 +108,7 @@ class CustomConfigEditor extends StatelessWidget {
             onChanged: (v) {
               final clampedMines =
                   config.mines.clamp(minMines, maxMinesFor(v, config.height));
-              onChanged(GameConfig(
-                width: v,
-                height: config.height,
-                mines: clampedMines,
-              ));
+              onChanged(config.copyWith(width: v, mines: clampedMines));
             },
           ),
           const SizedBox(height: 4),
@@ -125,11 +121,7 @@ class CustomConfigEditor extends StatelessWidget {
             onChanged: (v) {
               final clampedMines =
                   config.mines.clamp(minMines, maxMinesFor(config.width, v));
-              onChanged(GameConfig(
-                width: config.width,
-                height: v,
-                mines: clampedMines,
-              ));
+              onChanged(config.copyWith(height: v, mines: clampedMines));
             },
           ),
           const SizedBox(height: 4),
@@ -140,11 +132,7 @@ class CustomConfigEditor extends StatelessWidget {
             min: minMines,
             max: maxMines,
             onChanged: (v) {
-              onChanged(GameConfig(
-                width: config.width,
-                height: config.height,
-                mines: v,
-              ));
+              onChanged(config.copyWith(mines: v));
             },
           ),
         ],

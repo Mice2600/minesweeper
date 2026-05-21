@@ -54,18 +54,22 @@ class GameEngine {
 
   FlagOutcome? flag(int x, int y, {required String playerId}) {
     if (_status == GameStatus.won || _status == GameStatus.lost) return null;
-    final flagged = _board.toggleFlag(x, y, playerId: playerId);
-    if (flagged == null) return null;
+    // Remember whether the cell was flagged BEFORE we cycle so we know
+    // whether to bump or decrement the flagsPlaced stat.
+    final wasFlagged = _board.cellAt(x, y).isFlagged;
+    final mark = _board.cycleMark(x, y, playerId: playerId);
+    if (mark == null) return null;
+    final nowFlagged = mark == CellMark.flag;
     final stats = _statsFor(playerId);
-    if (flagged) {
+    if (nowFlagged && !wasFlagged) {
       stats.flagsPlaced++;
-    } else {
+    } else if (!nowFlagged && wasFlagged) {
       stats.flagsPlaced = (stats.flagsPlaced - 1).clamp(0, 1 << 30);
     }
     return FlagOutcome(
       x: x,
       y: y,
-      flagged: flagged,
+      mark: mark,
       byPlayerId: playerId,
     );
   }
@@ -73,9 +77,26 @@ class GameEngine {
   RevealOutcome chord(int x, int y, {required String playerId}) {
     if (_status != GameStatus.playing) return RevealOutcome.empty;
     final cells = _board.chord(x, y, playerId: playerId);
-    if (cells.isEmpty) return RevealOutcome.empty;
-    _statsFor(playerId).chordMoves++;
-    return _processReveal(cells, x, y, playerId);
+    if (cells.isNotEmpty) {
+      _statsFor(playerId).chordMoves++;
+      return _processReveal(cells, x, y, playerId);
+    }
+    if (!config.autoFlagChord) return RevealOutcome.empty;
+    // Fall back to the reverse chord: if the user has dug out enough of the
+    // adjacency that every remaining unrevealed neighbour must be a mine,
+    // flag them in one go.
+    final flagged = _board.autoFlag(x, y, playerId: playerId);
+    if (flagged.isEmpty) return RevealOutcome.empty;
+    final stats = _statsFor(playerId);
+    stats.chordMoves++;
+    stats.flagsPlaced += flagged.length;
+    return RevealOutcome(
+      cells: const [],
+      byPlayerId: playerId,
+      triggerX: x,
+      triggerY: y,
+      autoFlagged: flagged,
+    );
   }
 
   /// Shared post-processing for `reveal` and `chord`: counts stats, handles
@@ -267,6 +288,7 @@ class RevealOutcome {
     this.explosionCenters = const [],
     this.triggerX = 0,
     this.triggerY = 0,
+    this.autoFlagged = const [],
   });
   static const empty = RevealOutcome(cells: [], byPlayerId: '');
   final List<Reveal> cells;
@@ -276,18 +298,28 @@ class RevealOutcome {
   final List<List<int>> explosionCenters;
   final int triggerX;
   final int triggerY;
-  bool get isEmpty => cells.isEmpty;
+
+  /// Positions auto-flagged by a chord on a "satisfied-by-only-mines" number.
+  /// Empty for normal reveal/chord outcomes.
+  final List<List<int>> autoFlagged;
+
+  bool get isEmpty => cells.isEmpty && autoFlagged.isEmpty;
 }
 
 class FlagOutcome {
   const FlagOutcome({
     required this.x,
     required this.y,
-    required this.flagged,
+    required this.mark,
     required this.byPlayerId,
   });
   final int x;
   final int y;
-  final bool flagged;
+
+  /// The new mark state at the cell after this action.
+  final CellMark mark;
   final String byPlayerId;
+
+  bool get flagged => mark == CellMark.flag;
+  bool get questioned => mark == CellMark.question;
 }

@@ -102,6 +102,7 @@ class _HostLobbyScreenState extends ConsumerState<HostLobbyScreen> {
                   _RulesPicker(
                     mode: s.config.mode,
                     hearts: s.config.initialHearts,
+                    autoFlagChord: s.config.autoFlagChord,
                     onModeChanged: (m) {
                       final hearts = m == GameMode.hearts ? 3 : 1;
                       ref.read(sessionProvider.notifier).setConfig(
@@ -114,6 +115,11 @@ class _HostLobbyScreenState extends ConsumerState<HostLobbyScreen> {
                     onHeartsChanged: (h) {
                       ref.read(sessionProvider.notifier).setConfig(
                             s.config.copyWith(initialHearts: h),
+                          );
+                    },
+                    onAutoFlagChordChanged: (v) {
+                      ref.read(sessionProvider.notifier).setConfig(
+                            s.config.copyWith(autoFlagChord: v),
                           );
                     },
                   ),
@@ -149,7 +155,16 @@ class _HostLobbyScreenState extends ConsumerState<HostLobbyScreen> {
     setState(() => _customSelected = mode == BoardPreset.custom);
     final preset = mode.toPresetConfig();
     if (preset != null) {
-      ref.read(sessionProvider.notifier).setConfig(preset);
+      // Only swap the board dimensions/mines — keep the player's choices for
+      // game mode, lives, and auto-flag chord across preset changes.
+      final current = ref.read(sessionProvider).config;
+      ref.read(sessionProvider.notifier).setConfig(
+            current.copyWith(
+              width: preset.width,
+              height: preset.height,
+              mines: preset.mines,
+            ),
+          );
     }
     // For Custom, keep whatever config is currently set so sliders start there.
   }
@@ -307,14 +322,18 @@ class _RulesPicker extends StatelessWidget {
   const _RulesPicker({
     required this.mode,
     required this.hearts,
+    required this.autoFlagChord,
     required this.onModeChanged,
     required this.onHeartsChanged,
+    required this.onAutoFlagChordChanged,
   });
 
   final GameMode mode;
   final int hearts;
+  final bool autoFlagChord;
   final ValueChanged<GameMode> onModeChanged;
   final ValueChanged<int> onHeartsChanged;
+  final ValueChanged<bool> onAutoFlagChordChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -368,6 +387,19 @@ class _RulesPicker extends StatelessWidget {
             ],
           ),
         ],
+        const SizedBox(height: 8),
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          value: autoFlagChord,
+          onChanged: onAutoFlagChordChanged,
+          title: const Text('Auto-flag chord',
+              style: TextStyle(fontWeight: FontWeight.w600)),
+          subtitle: Text(
+            'Chording a number whose remaining hidden neighbours must all be '
+            'mines flags them in one tap.',
+            style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12),
+          ),
+        ),
       ],
     );
   }

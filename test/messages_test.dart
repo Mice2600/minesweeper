@@ -55,7 +55,7 @@ void main() {
         cells: const [Reveal(x: 0, y: 0, value: 0)],
         byPlayerId: 'h',
       ),
-      const SFlagged(x: 1, y: 2, flagged: true, byPlayerId: 'h'),
+      const SFlagged(x: 1, y: 2, mark: CellMark.flag, byPlayerId: 'h'),
       SGameOver(
         won: true,
         losingPlayerId: null,

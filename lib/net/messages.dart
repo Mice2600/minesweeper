@@ -280,7 +280,7 @@ sealed class ServerMessage {
       'flagged' => SFlagged(
           x: d['x'] as int,
           y: d['y'] as int,
-          flagged: d['flagged'] as bool,
+          mark: _markFromJson(d['mark'], d['flagged']),
           byPlayerId: d['byPlayerId'] as String,
         ),
       'gameOver' => SGameOver(
@@ -443,22 +443,42 @@ class SFlagged extends ServerMessage {
   const SFlagged({
     required this.x,
     required this.y,
-    required this.flagged,
+    required this.mark,
     required this.byPlayerId,
   });
   final int x;
   final int y;
-  final bool flagged;
+  final CellMark mark;
   final String byPlayerId;
+
+  bool get flagged => mark == CellMark.flag;
+  bool get questioned => mark == CellMark.question;
+
   @override
   String get _type => 'flagged';
   @override
   Map<String, dynamic> _payload() => {
         'x': x,
         'y': y,
+        'mark': mark.name,
+        // Legacy field kept so older builds can still decode our messages.
         'flagged': flagged,
         'byPlayerId': byPlayerId,
       };
+}
+
+/// Decodes a CellMark from a wire payload. Prefer the explicit `mark` string
+/// when present; otherwise fall back to the legacy `flagged: bool` field.
+CellMark _markFromJson(Object? markRaw, Object? flaggedRaw) {
+  if (markRaw is String) {
+    for (final m in CellMark.values) {
+      if (m.name == markRaw) return m;
+    }
+  }
+  if (flaggedRaw is bool) {
+    return flaggedRaw ? CellMark.flag : CellMark.none;
+  }
+  return CellMark.none;
 }
 
 class SGameOver extends ServerMessage {

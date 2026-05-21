@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import '../core/ids.dart';
+import '../game/board.dart';
 import '../game/difficulty.dart';
 import '../game/engine.dart';
 import '../net/messages.dart';
@@ -209,7 +210,7 @@ class HostSession {
           _broadcast(SFlagged(
             x: out.x,
             y: out.y,
-            flagged: out.flagged,
+            mark: out.mark,
             byPlayerId: out.byPlayerId,
           ));
         }
@@ -219,6 +220,14 @@ class HostSession {
         final out = e.chord(x, y, playerId: logicalId);
         if (out.cells.isNotEmpty) {
           _broadcast(SRevealed(cells: out.cells, byPlayerId: out.byPlayerId));
+        }
+        for (final p in out.autoFlagged) {
+          _broadcast(SFlagged(
+            x: p[0],
+            y: p[1],
+            mark: CellMark.flag,
+            byPlayerId: logicalId,
+          ));
         }
         if (out.heartLost) {
           _broadcast(SHeartsChanged(

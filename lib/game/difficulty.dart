@@ -33,6 +33,7 @@ class GameConfig {
     required this.mines,
     this.mode = GameMode.classic,
     this.initialHearts = 1,
+    this.autoFlagChord = true,
   })  : assert(width > 0 && height > 0),
         assert(mines > 0 && mines < width * height),
         assert(initialHearts > 0);
@@ -41,6 +42,7 @@ class GameConfig {
     Difficulty d, {
     GameMode mode = GameMode.classic,
     int hearts = 3,
+    bool autoFlagChord = true,
   }) =>
       GameConfig(
         width: d.width,
@@ -48,6 +50,7 @@ class GameConfig {
         mines: d.mines,
         mode: mode,
         initialHearts: mode == GameMode.hearts ? hearts : 1,
+        autoFlagChord: autoFlagChord,
       );
 
   factory GameConfig.fromJson(Map<String, dynamic> json) => GameConfig(
@@ -56,6 +59,9 @@ class GameConfig {
         mines: json['mines'] as int,
         mode: _parseMode(json['mode']),
         initialHearts: json['initialHearts'] as int? ?? 1,
+        // Default true so older clients that omit the field keep the new
+        // behaviour. Toggle off in the lobby for a strict-classic ruleset.
+        autoFlagChord: json['autoFlagChord'] as bool? ?? true,
       );
 
   final int width;
@@ -63,6 +69,10 @@ class GameConfig {
   final int mines;
   final GameMode mode;
   final int initialHearts;
+
+  /// When true, chording a number whose remaining unrevealed neighbours must
+  /// all be mines auto-flags them instead of doing nothing.
+  final bool autoFlagChord;
 
   int get cellCount => width * height;
 
@@ -72,6 +82,7 @@ class GameConfig {
     int? mines,
     GameMode? mode,
     int? initialHearts,
+    bool? autoFlagChord,
   }) =>
       GameConfig(
         width: width ?? this.width,
@@ -79,6 +90,7 @@ class GameConfig {
         mines: mines ?? this.mines,
         mode: mode ?? this.mode,
         initialHearts: initialHearts ?? this.initialHearts,
+        autoFlagChord: autoFlagChord ?? this.autoFlagChord,
       );
 
   Map<String, dynamic> toJson() => {
@@ -87,6 +99,7 @@ class GameConfig {
         'mines': mines,
         'mode': mode.name,
         'initialHearts': initialHearts,
+        'autoFlagChord': autoFlagChord,
       };
 
   static GameMode _parseMode(Object? raw) {

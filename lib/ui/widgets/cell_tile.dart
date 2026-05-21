@@ -6,6 +6,7 @@ class CellTile extends StatelessWidget {
     super.key,
     required this.value, // -2 hidden, -1 mine, 0..8 number
     required this.flagColor,
+    required this.questionColor,
     required this.size,
     required this.x,
     required this.y,
@@ -15,6 +16,7 @@ class CellTile extends StatelessWidget {
   /// -2 hidden, -1 mine, 0..8 number.
   final int value;
   final Color? flagColor;
+  final Color? questionColor;
   final double size;
   final int x;
   final int y;
@@ -74,6 +76,23 @@ class CellTile extends StatelessWidget {
             offset: Offset(0.8, 0.8),
           ),
         ],
+      );
+    } else if (hidden && questionColor != null) {
+      content = Text(
+        '?',
+        style: GoogleFonts.jetBrainsMono(
+          fontSize: size * 0.72,
+          fontWeight: FontWeight.w900,
+          color: questionColor,
+          height: 1.0,
+          shadows: const [
+            Shadow(
+              color: Color(0x55000000),
+              blurRadius: 1.5,
+              offset: Offset(0.8, 0.8),
+            ),
+          ],
+        ),
       );
     } else if (isMine) {
       content = Icon(

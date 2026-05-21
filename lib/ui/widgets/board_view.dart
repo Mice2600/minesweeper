@@ -125,6 +125,7 @@ class _BoardViewState extends State<BoardView> {
         if (nx < 0 || ny < 0 || nx >= snap.width || ny >= snap.height) continue;
         if (snap.cellAt(nx, ny) != -2) continue; // only pulse hidden cells
         if (snap.flagAt(nx, ny) != null) continue; // skip flagged
+        if (snap.questionAt(nx, ny) != null) continue; // skip questioned
         next.add(ny * snap.width + nx);
       }
     }
@@ -216,6 +217,7 @@ class _BoardViewState extends State<BoardView> {
                               y: y,
                               value: _displayValue(x, y),
                               flagColor: _flagColor(x, y),
+                              questionColor: _questionColor(x, y),
                               size: cellSize,
                               highlight: _isLastEvent(x, y),
                               pulsing: _pulseIndices.contains(y * w + x),
@@ -255,6 +257,13 @@ class _BoardViewState extends State<BoardView> {
 
   Color? _flagColor(int x, int y) {
     final pid = widget.snapshot.flagAt(x, y);
+    if (pid == null) return null;
+    final p = widget.snapshot.playerById(pid);
+    return p == null ? null : Color(p.color);
+  }
+
+  Color? _questionColor(int x, int y) {
+    final pid = widget.snapshot.questionAt(x, y);
     if (pid == null) return null;
     final p = widget.snapshot.playerById(pid);
     return p == null ? null : Color(p.color);
@@ -334,6 +343,7 @@ class _AnimatedCell extends StatelessWidget {
     required this.y,
     required this.value,
     required this.flagColor,
+    required this.questionColor,
     required this.size,
     required this.highlight,
     required this.pulsing,
@@ -342,6 +352,7 @@ class _AnimatedCell extends StatelessWidget {
   final int y;
   final int value;
   final Color? flagColor;
+  final Color? questionColor;
   final double size;
   final bool highlight;
   final bool pulsing;
@@ -352,6 +363,7 @@ class _AnimatedCell extends StatelessWidget {
       y: y,
       value: value,
       flagColor: flagColor,
+      questionColor: questionColor,
       size: size,
       highlight: highlight || pulsing,
     );

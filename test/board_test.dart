@@ -77,7 +77,7 @@ void main() {
     test('revealing a flagged cell is a no-op', () {
       final b = Board(const GameConfig(width: 5, height: 5, mines: 1));
       b.placeMines(seed: 0, safeX: 0, safeY: 0);
-      b.toggleFlag(2, 2, playerId: 'p1');
+      b.cycleMark(2, 2, playerId: 'p1');
       final out = b.reveal(2, 2, playerId: 'p1');
       expect(out, isEmpty);
       expect(b.cellAt(2, 2).isFlagged, isTrue);

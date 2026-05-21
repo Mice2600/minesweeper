@@ -2,7 +2,11 @@ import 'dart:math';
 
 import 'difficulty.dart';
 
-enum CellState { hidden, revealed, flagged }
+enum CellState { hidden, revealed, flagged, questioned }
+
+/// The 3-state cycle that a right-click / long-press steps through.
+/// none → flag → question → none.
+enum CellMark { none, flag, question }
 
 class Cell {
   Cell({
@@ -10,6 +14,7 @@ class Cell {
     this.adjacentMines = 0,
     this.state = CellState.hidden,
     this.flaggedBy,
+    this.questionedBy,
     this.revealedBy,
   });
 
@@ -17,11 +22,17 @@ class Cell {
   int adjacentMines;
   CellState state;
   String? flaggedBy;
+  String? questionedBy;
   String? revealedBy;
 
   bool get isHidden => state == CellState.hidden;
   bool get isRevealed => state == CellState.revealed;
   bool get isFlagged => state == CellState.flagged;
+  bool get isQuestioned => state == CellState.questioned;
+
+  /// True for any user-placed mark (flag or question). Marked cells are
+  /// protected from accidental flood-fill reveals.
+  bool get isMarked => isFlagged || isQuestioned;
 }
 
 class Board {
@@ -96,7 +107,7 @@ class Board {
   List<Reveal> reveal(int x, int y, {required String playerId}) {
     if (!inBounds(x, y)) return const [];
     final root = cellAt(x, y);
-    if (root.isRevealed || root.isFlagged) return const [];
+    if (root.isRevealed || root.isMarked) return const [];
 
     if (root.isMine) {
       root.state = CellState.revealed;
@@ -116,7 +127,7 @@ class Board {
       final cx = pos[0];
       final cy = pos[1];
       final c = cellAt(cx, cy);
-      if (c.isRevealed || c.isFlagged || c.isMine) continue;
+      if (c.isRevealed || c.isMarked || c.isMine) continue;
       c.state = CellState.revealed;
       c.revealedBy = playerId;
       _revealedCount++;
@@ -135,20 +146,69 @@ class Board {
     return out;
   }
 
-  /// Toggle a flag on the cell. Returns null if the cell is already revealed.
-  /// Returns true if the cell ended up flagged, false if unflagged.
-  bool? toggleFlag(int x, int y, {required String playerId}) {
+  /// Step the cell through the 3-state mark cycle: hidden → flagged →
+  /// questioned → hidden. Returns the new mark, or null if the cell is
+  /// already revealed (and so cannot be marked).
+  CellMark? cycleMark(int x, int y, {required String playerId}) {
     if (!inBounds(x, y)) return null;
     final c = cellAt(x, y);
     if (c.isRevealed) return null;
-    if (c.isFlagged) {
-      c.state = CellState.hidden;
-      c.flaggedBy = null;
-      return false;
+    switch (c.state) {
+      case CellState.hidden:
+        c.state = CellState.flagged;
+        c.flaggedBy = playerId;
+        c.questionedBy = null;
+        return CellMark.flag;
+      case CellState.flagged:
+        c.state = CellState.questioned;
+        c.flaggedBy = null;
+        c.questionedBy = playerId;
+        return CellMark.question;
+      case CellState.questioned:
+      case CellState.revealed:
+        c.state = CellState.hidden;
+        c.flaggedBy = null;
+        c.questionedBy = null;
+        return CellMark.none;
     }
-    c.state = CellState.flagged;
-    c.flaggedBy = playerId;
-    return true;
+  }
+
+  /// Reverse chord: if the only way to satisfy a revealed number's adjacency
+  /// is for every remaining unrevealed neighbour to be a mine, flag them all.
+  /// Returns the positions of cells that were newly flagged. Cells that were
+  /// previously "?" are converted to flags (the math has resolved the doubt).
+  /// Cells already flagged are left untouched and not included in the result.
+  List<List<int>> autoFlag(int x, int y, {required String playerId}) {
+    if (!inBounds(x, y)) return const [];
+    final c = cellAt(x, y);
+    if (!c.isRevealed || c.adjacentMines == 0) return const [];
+
+    var flagCount = 0;
+    final candidates = <List<int>>[];
+    for (var dy = -1; dy <= 1; dy++) {
+      for (var dx = -1; dx <= 1; dx++) {
+        if (dx == 0 && dy == 0) continue;
+        final nx = x + dx;
+        final ny = y + dy;
+        if (!inBounds(nx, ny)) continue;
+        final n = cellAt(nx, ny);
+        if (n.isFlagged) {
+          flagCount++;
+        } else if (n.isHidden || n.isQuestioned) {
+          candidates.add([nx, ny]);
+        }
+      }
+    }
+    if (candidates.isEmpty) return const [];
+    if (flagCount + candidates.length != c.adjacentMines) return const [];
+
+    for (final p in candidates) {
+      final cell = cellAt(p[0], p[1]);
+      cell.state = CellState.flagged;
+      cell.flaggedBy = playerId;
+      cell.questionedBy = null;
+    }
+    return candidates;
   }
 
   /// Chord click: if cell is revealed with a number, and adjacent flags match
@@ -210,6 +270,7 @@ class Board {
         final c = cellAt(x, y);
         if (c.isMine || c.isRevealed) continue;
         c.flaggedBy = null;
+        c.questionedBy = null;
         c.state = CellState.revealed;
         c.revealedBy = playerId;
         _revealedCount++;
@@ -251,6 +312,7 @@ class Board {
         mineCell.state = CellState.revealed;
         mineCell.revealedBy = playerId;
         mineCell.flaggedBy = null;
+        mineCell.questionedBy = null;
         reveals.add(Reveal(x: mx, y: my, value: -1, isMine: true));
       }
       centers.add([mx, my]);
@@ -269,9 +331,10 @@ class Board {
           if (n.isMine) {
             queue.add([nx, ny]);
           } else {
-            if (n.isFlagged) {
+            if (n.isMarked) {
               n.state = CellState.hidden;
               n.flaggedBy = null;
+              n.questionedBy = null;
             }
             final r = reveal(nx, ny, playerId: playerId);
             for (final rev in r) {
