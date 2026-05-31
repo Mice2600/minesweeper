@@ -4,6 +4,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../game/engine.dart';
 import '../../state/session.dart';
 import 'cell_tile.dart';
 import 'explosion_overlay.dart';
@@ -149,6 +150,8 @@ class _BoardViewState extends State<BoardView> {
     final cellSize = widget.cellSize;
     final boardWidth = cellSize * w;
     final boardHeight = cellSize * h;
+    final won = widget.snapshot.status == GameStatus.won;
+    final exploded = widget.snapshot.explodedMines;
 
     return SizedBox(
       width: boardWidth,
@@ -212,18 +215,36 @@ class _BoardViewState extends State<BoardView> {
                         for (var x = 0; x < w; x++)
                           LayoutId(
                             id: y * w + x,
-                            child: _AnimatedCell(
-                              x: x,
-                              y: y,
-                              value: _displayValue(x, y),
-                              flagColor: _flagColor(x, y),
-                              questionColor: _questionColor(x, y),
-                              size: cellSize,
-                              highlight: _isLastEvent(x, y),
-                              pulsing: _pulseIndices.contains(y * w + x),
+                            child: RepaintBoundary(
+                              child: _AnimatedCell(
+                                x: x,
+                                y: y,
+                                value: _displayValue(x, y),
+                                flagColor: _flagColor(x, y),
+                                questionColor: _questionColor(x, y),
+                                size: cellSize,
+                                highlight: _isLastEvent(x, y),
+                                pulsing: _pulseIndices.contains(y * w + x),
+                                won: won,
+                                wasExploded: exploded.contains(y * w + x),
+                              ),
                             ),
                           ),
                     ],
+                  ),
+                  IgnorePointer(
+                    child: CustomPaint(
+                      size: Size(boardWidth, boardHeight),
+                      painter: _BoardEdgesPainter(
+                        displayValues: [
+                          for (var i = 0; i < w * h; i++)
+                            _displayValue(i % w, i ~/ w),
+                        ],
+                        width: w,
+                        height: h,
+                        cell: cellSize,
+                      ),
+                    ),
                   ),
                   if (widget.snapshot.lastExplosion != null)
                     Positioned.fill(
@@ -302,7 +323,14 @@ class _BoardViewState extends State<BoardView> {
     widget.snapshot.cursors.forEach((pid, pos) {
       final p = widget.snapshot.playerById(pid);
       if (p == null) return;
-      out.add(Positioned(
+      // Cursors are sent at ~10 Hz (see [_throttledCursor]). AnimatedPositioned
+      // lerps between updates so motion looks fluid at much lower bandwidth.
+      // The ValueKey keeps the widget identity stable across rebuilds so the
+      // tween animates instead of teleporting.
+      out.add(AnimatedPositioned(
+        key: ValueKey('cursor-$pid'),
+        duration: const Duration(milliseconds: 140),
+        curve: Curves.linear,
         left: pos.nx * w - 10,
         top: pos.ny * h - 10,
         child: IgnorePointer(
@@ -320,13 +348,21 @@ class _GridLayout extends MultiChildLayoutDelegate {
   final int height;
   final double cell;
 
+  // Each cell overdraws by this much on the right and bottom so neighbors
+  // overlap by a fraction of a pixel. At fractional InteractiveViewer zoom
+  // levels this hides subpixel antialiasing seams between adjacent cells
+  // (which otherwise appear as thin bright lines through the grid).
+  static const double _overdraw = 0.75;
+
   @override
   void performLayout(Size size) {
     for (var y = 0; y < height; y++) {
       for (var x = 0; x < width; x++) {
         final id = y * width + x;
         if (!hasChild(id)) continue;
-        layoutChild(id, BoxConstraints.tight(Size(cell, cell)));
+        final extraW = x == width - 1 ? 0.0 : _overdraw;
+        final extraH = y == height - 1 ? 0.0 : _overdraw;
+        layoutChild(id, BoxConstraints.tight(Size(cell + extraW, cell + extraH)));
         positionChild(id, Offset(x * cell, y * cell));
       }
     }
@@ -347,6 +383,8 @@ class _AnimatedCell extends StatelessWidget {
     required this.size,
     required this.highlight,
     required this.pulsing,
+    required this.won,
+    required this.wasExploded,
   });
   final int x;
   final int y;
@@ -356,6 +394,8 @@ class _AnimatedCell extends StatelessWidget {
   final double size;
   final bool highlight;
   final bool pulsing;
+  final bool won;
+  final bool wasExploded;
   @override
   Widget build(BuildContext context) {
     return CellTile(
@@ -366,7 +406,78 @@ class _AnimatedCell extends StatelessWidget {
       questionColor: questionColor,
       size: size,
       highlight: highlight || pulsing,
+      won: won,
+      wasExploded: wasExploded,
     );
+  }
+}
+
+/// Paints the dark "cliff" between hidden grass and revealed dirt as a
+/// single canvas pass on top of the grid. Drawing edges as one painter
+/// avoids the InteractiveViewer subpixel-seam issue that affects per-cell
+/// borders, and keeps lines sharp regardless of zoom.
+class _BoardEdgesPainter extends CustomPainter {
+  _BoardEdgesPainter({
+    required this.displayValues,
+    required this.width,
+    required this.height,
+    required this.cell,
+  });
+
+  final List<int> displayValues;
+  final int width;
+  final int height;
+  final double cell;
+
+  static const double _strokeWidth = 1.5;
+
+  bool _hidden(int x, int y) {
+    if (x < 0 || y < 0 || x >= width || y >= height) return false;
+    return displayValues[y * width + x] == -2;
+  }
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = CellTile.hiddenEdge
+      ..strokeWidth = _strokeWidth
+      ..style = PaintingStyle.stroke;
+    for (var y = 0; y < height; y++) {
+      for (var x = 0; x < width; x++) {
+        if (!_hidden(x, y)) continue;
+        final left = x * cell;
+        final top = y * cell;
+        final right = left + cell;
+        final bottom = top + cell;
+        if (!_hidden(x, y - 1)) {
+          canvas.drawLine(Offset(left, top), Offset(right, top), paint);
+        }
+        if (!_hidden(x + 1, y)) {
+          canvas.drawLine(Offset(right, top), Offset(right, bottom), paint);
+        }
+        if (!_hidden(x, y + 1)) {
+          canvas.drawLine(Offset(left, bottom), Offset(right, bottom), paint);
+        }
+        if (!_hidden(x - 1, y)) {
+          canvas.drawLine(Offset(left, top), Offset(left, bottom), paint);
+        }
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _BoardEdgesPainter old) {
+    if (old.width != width || old.height != height || old.cell != cell) {
+      return true;
+    }
+    final a = old.displayValues;
+    final b = displayValues;
+    if (a.length != b.length) return true;
+    for (var i = 0; i < a.length; i++) {
+      // Only the hidden/not-hidden distinction matters for edges.
+      if ((a[i] == -2) != (b[i] == -2)) return true;
+    }
+    return false;
   }
 }
 

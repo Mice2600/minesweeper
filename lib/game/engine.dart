@@ -22,6 +22,7 @@ class GameEngine {
   DateTime? _endedAt;
   String? _losingPlayerId;
   int _hearts;
+  final List<String> _heartsLostBy = [];
 
   final Map<String, PlayerStats> _stats = {};
 
@@ -32,6 +33,7 @@ class GameEngine {
   String? get losingPlayerId => _losingPlayerId;
   int get hearts => _hearts;
   int get initialHearts => config.initialHearts;
+  List<String> get heartsLostBy => List.unmodifiable(_heartsLostBy);
   Map<String, PlayerStats> get stats => Map.unmodifiable(_stats);
 
   PlayerStats _statsFor(String id) =>
@@ -126,6 +128,7 @@ class GameEngine {
     if (mineHit) {
       if (config.mode == GameMode.hearts && _hearts > 0) {
         _hearts--;
+        _heartsLostBy.add(playerId);
         // Chain off the trigger cell (or each mine cell that just revealed).
         for (final r in initialCells.where((c) => c.isMine)) {
           final chain = _board.chainExplode(r.x, r.y, playerId: playerId);

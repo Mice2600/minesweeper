@@ -138,9 +138,10 @@ class HostSession {
 
     // Mark the slot offline immediately so the UI can show a "reconnecting"
     // badge — but hold the player record for the grace window so a rejoin
-    // can restore them in place.
+    // can restore them in place. Patch instead of full lobby; the player set
+    // hasn't actually changed yet.
     _players[logicalId] = existing.copyWith(isOffline: true);
-    _broadcastLobby();
+    _broadcast(SPlayerPatch(playerId: logicalId, isOffline: true));
 
     _graceTimers[logicalId]?.cancel();
     _graceTimers[logicalId] = Timer(_graceWindow, () {
@@ -169,8 +170,11 @@ class HostSession {
         _sendTo(logicalId, const SPong());
       case CReady(:final ready):
         final p = _players[logicalId];
-        if (p != null) _players[logicalId] = p.copyWith(isReady: ready);
-        _broadcastLobby();
+        if (p == null) return;
+        _players[logicalId] = p.copyWith(isReady: ready);
+        // Just patch the one field instead of re-broadcasting the whole lobby
+        // — ready toggling is the most-clicked button in the lobby.
+        _broadcast(SPlayerPatch(playerId: logicalId, isReady: ready));
       case CStartGame(:final config):
         if (logicalId != hostId) {
           _sendTo(logicalId,
@@ -184,7 +188,6 @@ class HostSession {
           seed: _engine!.seed,
           startedAt: DateTime.now().millisecondsSinceEpoch,
         ));
-        _broadcastLobby();
       case CReveal(:final x, :final y):
         final e = _engine;
         if (e == null) return;
@@ -376,6 +379,7 @@ class HostSession {
         flags: flags,
         hearts: e.hearts,
         stats: e.stats,
+        heartsLostBy: e.heartsLostBy,
         rejoinToken: token,
       ),
     );

@@ -33,6 +33,8 @@ class GameSnapshot {
     required this.losingPlayerId,
     required this.stats,
     required this.hearts,
+    this.heartsLostBy = const [],
+    this.explodedMines = const {},
     this.lastExplosion,
     this.startedAtMs = 0,
     this.endedAtMs = 0,
@@ -66,6 +68,16 @@ class GameSnapshot {
   /// Hearts remaining in Hearts mode. In Classic mode this equals 1 while
   /// playing and 0 after a loss.
   final int hearts;
+
+  /// Chronological list of player ids who lost each heart in Hearts mode.
+  /// `length == initialHearts - hearts`; index 0 is the first heart lost.
+  final List<String> heartsLostBy;
+
+  /// Cell indices (`y * width + x`) of mines that were detonated *during play*
+  /// — i.e. revealed via SRevealed, not via SGameOver's reveal-all. Used on
+  /// the win screen to distinguish "mines you blew up" (dark red) from "mines
+  /// you correctly flagged" (green).
+  final Set<int> explodedMines;
 
   /// Most recent chain-explosion event for animation.
   final ({int x, int y, List<List<int>> centers, int id})? lastExplosion;
@@ -122,6 +134,8 @@ class GameSnapshot {
     String? losingPlayerId,
     Map<String, PlayerStats>? stats,
     int? hearts,
+    List<String>? heartsLostBy,
+    Set<int>? explodedMines,
     ({int x, int y, List<List<int>> centers, int id})? lastExplosion,
     bool clearLastExplosion = false,
     int? startedAtMs,
@@ -141,6 +155,8 @@ class GameSnapshot {
         losingPlayerId: losingPlayerId ?? this.losingPlayerId,
         stats: stats ?? this.stats,
         hearts: hearts ?? this.hearts,
+        heartsLostBy: heartsLostBy ?? this.heartsLostBy,
+        explodedMines: explodedMines ?? this.explodedMines,
         lastExplosion:
             clearLastExplosion ? null : (lastExplosion ?? this.lastExplosion),
         startedAtMs: startedAtMs ?? this.startedAtMs,
@@ -474,7 +490,7 @@ class SessionNotifier extends Notifier<SessionState> {
       _reconnectAttempt = 0;
       _guestSub = transport.events.listen(
         _handleServerMessage,
-        onError: (e) => _handleTransportDown('Connection error: $e'),
+        onError: (e) => _handleTransportDown(_friendlyConnectError(e, mode)),
         onDone: () => _handleTransportDown(null),
       );
     } catch (e) {
@@ -487,14 +503,58 @@ class SessionNotifier extends Notifier<SessionState> {
         _clearReconnectState();
         state = state.copyWith(
           connectionState: SessionConnState.idle,
-          errorMessage: e is RelayJoinException
-              ? e.userMessage
-              : 'Failed to connect: $e',
+          errorMessage: _friendlyConnectError(e, mode),
         );
       } else {
         _scheduleReconnect();
       }
     }
+  }
+
+  /// Maps the raw exception from a failed connect attempt into a message that
+  /// tells the user what to do next. The default `SocketException.toString()`
+  /// includes scary fragments like `errno = 13` that aren't actionable.
+  String _friendlyConnectError(Object e, JoinMode mode) {
+    if (e is RelayJoinException) return e.userMessage;
+    final raw = e.toString();
+    final lower = raw.toLowerCase();
+    // Android returns EACCES on connect() when a VPN, captive portal, or AP
+    // isolation blocks the LAN socket. The OS-level INTERNET permission is
+    // unrelated; surfacing the OS error verbatim is misleading.
+    if (lower.contains('permission denied') || lower.contains('errno = 13')) {
+      return mode == JoinMode.lan
+          ? "Can't reach the host on this network.\n\n"
+              "• Make sure both devices are on the same Wi-Fi (not cellular).\n"
+              "• Turn off any VPN on this device.\n"
+              "• Some Wi-Fi networks (public, guest, work) block device-to-device "
+              "connections. Try a home network or a phone hotspot."
+          : "The network is blocking the connection. Turn off any VPN, or try a different Wi-Fi.";
+    }
+    if (lower.contains('network is unreachable') ||
+        lower.contains('no route to host') ||
+        lower.contains('errno = 101') ||
+        lower.contains('errno = 113')) {
+      return mode == JoinMode.lan
+          ? "Host isn't reachable. Make sure both devices are on the same Wi-Fi network."
+          : "Network unreachable — check your internet connection.";
+    }
+    if (lower.contains('connection refused') || lower.contains('errno = 111')) {
+      return mode == JoinMode.lan
+          ? 'Host is not accepting connections. Ask them to restart the lobby and try again.'
+          : "Couldn't reach the relay. Try again in a moment.";
+    }
+    if (lower.contains('timed out') || lower.contains('timeout')) {
+      return mode == JoinMode.lan
+          ? "Host didn't respond. Check that both devices are on the same Wi-Fi and the host is still in the lobby."
+          : 'Connection timed out — check your internet and try again.';
+    }
+    if (lower.contains('failed host lookup') ||
+        lower.contains('no address associated')) {
+      return mode == JoinMode.lan
+          ? "Couldn't resolve the host address — double-check the LAN URL."
+          : "Couldn't resolve the relay address — check your internet.";
+    }
+    return 'Failed to connect. Check your network and try again.';
   }
 
   void _handleTransportDown(String? errMsg) {
@@ -594,25 +654,35 @@ class SessionNotifier extends Notifier<SessionState> {
           :final config,
           :final hearts
         ):
-        final empty = _emptySnapshot(config, hostId, players, status,
-            hearts: hearts > 0 ? hearts : config.initialHearts);
-        // Preserve existing reveals/flags if game is in progress.
-        if (snap != null &&
+        // Preserve existing reveals/flags if game is in progress. A stale
+        // `waiting` lobby that arrives during play (e.g. right after
+        // SGameStarted, before the engine has registered the first reveal)
+        // must not tear down the active match — only let SLobby move us out
+        // of `playing` when it explicitly signals a finished game.
+        final inGame = snap != null &&
             snap.config.width == config.width &&
             snap.config.height == config.height &&
-            status == GameStatus.playing) {
+            (snap.status == GameStatus.playing ||
+                status == GameStatus.playing);
+        if (inGame) {
+          final effectiveStatus =
+              (status == GameStatus.won || status == GameStatus.lost)
+                  ? status
+                  : GameStatus.playing;
           state = state.copyWith(
             config: config,
             snapshot: snap.copyWith(
               config: config,
               hostId: hostId,
               players: players,
-              status: status,
+              status: effectiveStatus,
               hearts: hearts,
             ),
-            connectionState: _stateFromStatus(status),
+            connectionState: _stateFromStatus(effectiveStatus),
           );
         } else {
+          final empty = _emptySnapshot(config, hostId, players, status,
+              hearts: hearts > 0 ? hearts : config.initialHearts);
           state = state.copyWith(
             config: config,
             snapshot: empty,
@@ -638,11 +708,16 @@ class SessionNotifier extends Notifier<SessionState> {
         final newCells = List<int>.from(snap.cells);
         final newFlags = List<String?>.from(snap.flags);
         final newQuestions = List<String?>.from(snap.questions);
+        Set<int>? newExploded;
         for (final r in cells) {
           final idx = r.y * snap.width + r.x;
           newCells[idx] = r.value;
           newFlags[idx] = null;
           newQuestions[idx] = null;
+          if (r.value == -1) {
+            newExploded ??= Set<int>.from(snap.explodedMines);
+            newExploded.add(idx);
+          }
         }
         final last = cells.isNotEmpty
             ? (x: cells.last.x, y: cells.last.y, byPlayer: byPlayerId)
@@ -652,6 +727,7 @@ class SessionNotifier extends Notifier<SessionState> {
             cells: newCells,
             flags: newFlags,
             questions: newQuestions,
+            explodedMines: newExploded ?? snap.explodedMines,
             lastEvent: last,
           ),
         );
@@ -706,6 +782,7 @@ class SessionNotifier extends Notifier<SessionState> {
         state = state.copyWith(
           snapshot: snap.copyWith(
             hearts: hearts,
+            heartsLostBy: [...snap.heartsLostBy, byPlayerId],
             lastExplosion: (
               x: x,
               y: y,
@@ -715,6 +792,29 @@ class SessionNotifier extends Notifier<SessionState> {
             lastEvent: (x: x, y: y, byPlayer: byPlayerId),
           ),
         );
+      case SPlayerPatch(
+          :final playerId,
+          :final isReady,
+          :final isOffline,
+          :final name
+        ):
+        if (snap == null) return;
+        var changed = false;
+        final newPlayers = <PlayerInfo>[];
+        for (final p in snap.players) {
+          if (p.id != playerId) {
+            newPlayers.add(p);
+            continue;
+          }
+          changed = true;
+          newPlayers.add(p.copyWith(
+            isReady: isReady,
+            isOffline: isOffline,
+            name: name,
+          ));
+        }
+        if (!changed) return;
+        state = state.copyWith(snapshot: snap.copyWith(players: newPlayers));
       case SCursor(:final playerId, :final nx, :final ny):
         if (snap == null) return;
         if (playerId == state.localId) return;
@@ -744,6 +844,7 @@ class SessionNotifier extends Notifier<SessionState> {
           :final flags,
           :final hearts,
           :final stats,
+          :final heartsLostBy,
           :final rejoinToken,
         ):
         if (snap == null) return;
@@ -752,9 +853,11 @@ class SessionNotifier extends Notifier<SessionState> {
         final width = snap.width;
         // Sized snapshots from the host always match the lobby config we
         // were just told about; if not we conservatively skip the cell wipe.
+        final newExploded = <int>{};
         if (cells.length == newCells.length) {
           for (var i = 0; i < cells.length; i++) {
             newCells[i] = cells[i];
+            if (cells[i] == -1) newExploded.add(i);
           }
         }
         final newFlags = List<String?>.filled(snap.width * snap.height, null);
@@ -770,6 +873,8 @@ class SessionNotifier extends Notifier<SessionState> {
             flags: newFlags,
             hearts: hearts,
             stats: stats,
+            heartsLostBy: heartsLostBy,
+            explodedMines: newExploded,
           ),
           connectionState: SessionConnState.playing,
         );

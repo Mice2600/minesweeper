@@ -32,7 +32,7 @@ void main() {
 
   group('ServerMessage round-trip', () {
     final cases = <ServerMessage>[
-      const SWelcome(yourId: 'abc', protocol: 1),
+      const SWelcome(yourId: 'abc', protocol: 4),
       SLobby(
         hostId: 'h',
         players: const [

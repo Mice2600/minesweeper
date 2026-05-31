@@ -43,7 +43,12 @@ class RelayHostTransport implements HostTransport {
   static const _deadTimeout = Duration(seconds: 30);
   Timer? _watchdog;
   DateTime _lastFrameAt = DateTime.now();
-  int _connectedGuests = 0;
+
+  /// Relay-assigned guest ids currently attached to this room. Maintained from
+  /// `joined`/`left` control frames so [broadcast] with `excludePlayerId` can
+  /// fan out per-guest (the relay's `to-all` can't exclude).
+  final Set<String> _guests = <String>{};
+  int get _connectedGuests => _guests.length;
 
   // ─── Reclaim bookkeeping ─────────────────────────────────────────────────
   // After /create succeeds, we cache the assigned [code] and [hostToken] so
@@ -160,18 +165,19 @@ class RelayHostTransport implements HostTransport {
 
   @override
   void broadcast(ServerMessage msg, {String? excludePlayerId}) {
-    if (excludePlayerId == null) {
-      _sendFrame({'kind': 'to-all', 'msg': msg.encode()});
+    final encoded = msg.encode();
+    if (excludePlayerId == null || !_guests.contains(excludePlayerId)) {
+      _sendFrame({'kind': 'to-all', 'msg': encoded});
       return;
     }
-    // The relay's "to-all" can't exclude — fall back to per-guest sends.
-    // The session layer only excludes the original sender; this is rare
-    // (only cursor frames), so the per-target send overhead is fine.
-    // We don't have the guest list here, so we let the relay do the broadcast
-    // and the excluded guest's own client filters it locally. This matches
-    // existing LAN behavior where SCursor sent with exclude=self is also
-    // filtered client-side in [SessionNotifier._handleServerMessage].
-    _sendFrame({'kind': 'to-all', 'msg': msg.encode()});
+    // The relay's "to-all" can't exclude, but we now track guest ids so we
+    // can fan out per-guest. This is the hot path for cursor frames — without
+    // it the sender's own cursor echoes back through the relay only to be
+    // dropped client-side, doubling cursor traffic.
+    for (final id in _guests) {
+      if (id == excludePlayerId) continue;
+      _sendFrame({'kind': 'to-guest', 'to': id, 'msg': encoded});
+    }
   }
 
   void _sendFrame(Map<String, Object?> frame) {
@@ -214,13 +220,13 @@ class RelayHostTransport implements HostTransport {
         } else if (op == 'joined') {
           final id = j['id'] as String?;
           if (id != null) {
-            _connectedGuests++;
+            _guests.add(id);
             _ctrl.add(GuestConnected(id));
           }
         } else if (op == 'left') {
           final id = j['id'] as String?;
           if (id != null) {
-            if (_connectedGuests > 0) _connectedGuests--;
+            _guests.remove(id);
             _ctrl.add(GuestDisconnected(id));
           }
         } else if (op == 'error') {
@@ -321,10 +327,11 @@ class RelayHostTransport implements HostTransport {
       return;
     }
     // Re-bind the transport to the new channel. Reset per-connection state
-    // so the watchdog and guest counter recompute from incoming frames.
+    // so the watchdog and guest set recompute from incoming `joined` frames
+    // the relay replays after a reclaim.
     _channel = channel;
     _lastFrameAt = DateTime.now();
-    _connectedGuests = 0;
+    _guests.clear();
     _reclaimAttempt = 0;
     _sub = channel.stream.listen(
       _onFrame,

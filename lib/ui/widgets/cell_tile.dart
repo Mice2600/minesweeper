@@ -11,6 +11,8 @@ class CellTile extends StatelessWidget {
     required this.x,
     required this.y,
     this.highlight = false,
+    this.won = false,
+    this.wasExploded = false,
   });
 
   /// -2 hidden, -1 mine, 0..8 number.
@@ -22,15 +24,28 @@ class CellTile extends StatelessWidget {
   final int y;
   final bool highlight;
 
+  /// Game ended in a win. When true, mines are tinted by outcome:
+  /// green if [flagColor] is non-null (correctly flagged), dark red if
+  /// [wasExploded] is true (Hearts-mode detonation), neutral otherwise.
+  final bool won;
+
+  /// This mine was detonated mid-play (came through SRevealed with -1),
+  /// as opposed to being revealed at game-end by SGameOver.
+  final bool wasExploded;
+
+  // Dark color used by [BoardEdgesPainter] for the cliff between hidden
+  // and revealed regions.
+  static const hiddenEdge = Color(0xFF4A7A1F);
+
   // Google-Minesweeper grass / dirt checkerboard.
   static const _hiddenLight = Color(0xFFAAD751);
   static const _hiddenDark = Color(0xFFA2D149);
   static const _hiddenHover = Color(0xFFBFE17D);
-  static const _hiddenEdge = Color(0xFF8ECC39);
   static const _revealedLight = Color(0xFFE5C29F);
   static const _revealedDark = Color(0xFFD7B899);
-  static const _revealedEdge = Color(0xFFBA9978);
   static const _mineBg = Color(0xFFDB3236);
+  static const _mineBgCorrect = Color(0xFF2E7D32); // green 800
+  static const _mineBgExploded = Color(0xFF7F0000); // dark red
 
   static const _numberColors = <Color>[
     Colors.transparent,
@@ -56,12 +71,16 @@ class CellTile extends StatelessWidget {
           ? _hiddenHover
           : (even ? _hiddenLight : _hiddenDark);
     } else if (isMine) {
-      bg = _mineBg;
+      if (won && flagColor != null) {
+        bg = _mineBgCorrect;
+      } else if (won && wasExploded) {
+        bg = _mineBgExploded;
+      } else {
+        bg = _mineBg;
+      }
     } else {
       bg = even ? _revealedLight : _revealedDark;
     }
-
-    final edge = hidden ? _hiddenEdge : _revealedEdge;
 
     Widget content;
     if (hidden && flagColor != null) {
@@ -117,10 +136,7 @@ class CellTile extends StatelessWidget {
     return AnimatedContainer(
       duration: const Duration(milliseconds: 140),
       curve: Curves.easeOut,
-      decoration: BoxDecoration(
-        color: bg,
-        border: Border.all(color: edge, width: 0.5),
-      ),
+      decoration: BoxDecoration(color: bg),
       alignment: Alignment.center,
       child: content,
     );

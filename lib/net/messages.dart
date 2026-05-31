@@ -5,7 +5,12 @@ import '../game/difficulty.dart';
 import '../game/engine.dart';
 
 /// Protocol version. Bump on breaking change.
-const protocolVersion = 3;
+///
+/// v4: `SRevealed.cells` carries a packed `[x,y,v, x,y,v, …]` int list
+/// instead of an array of `{x,y,value,mine?}` maps. Same information, ~60%
+/// smaller on the wire — important for flood-fills that uncover hundreds of
+/// cells in one frame.
+const protocolVersion = 4;
 
 // ───────────────────────────────────────── Player ─────────────────────────────
 
@@ -271,10 +276,7 @@ sealed class ServerMessage {
           startedAt: d['startedAt'] as int,
         ),
       'revealed' => SRevealed(
-          cells: (d['cells'] as List)
-              .cast<Map>()
-              .map((m) => Reveal.fromJson(m.cast<String, dynamic>()))
-              .toList(),
+          cells: _decodeReveals(d['cells']),
           byPlayerId: d['byPlayerId'] as String,
         ),
       'flagged' => SFlagged(
@@ -320,6 +322,12 @@ sealed class ServerMessage {
               .map((p) => [p[0] as int, p[1] as int])
               .toList(),
         ),
+      'playerPatch' => SPlayerPatch(
+          playerId: d['playerId'] as String,
+          isReady: d['isReady'] as bool?,
+          isOffline: d['isOffline'] as bool?,
+          name: d['name'] as String?,
+        ),
       'pong' => const SPong(),
       'hostAway' => const SHostAway(),
       'hostBack' => const SHostBack(),
@@ -339,6 +347,8 @@ sealed class ServerMessage {
                 k as String,
                 PlayerStats.fromJson((v as Map).cast<String, dynamic>())),
           ),
+          heartsLostBy:
+              ((d['heartsLostBy'] as List?) ?? const []).cast<String>(),
           rejoinToken: d['rejoinToken'] as String?,
         ),
       _ => throw FormatException('unknown server message: $type'),
@@ -433,10 +443,47 @@ class SRevealed extends ServerMessage {
   @override
   String get _type => 'revealed';
   @override
-  Map<String, dynamic> _payload() => {
-        'cells': cells.map((c) => c.toJson()).toList(),
-        'byPlayerId': byPlayerId,
-      };
+  Map<String, dynamic> _payload() {
+    // Packed triplet form: [x0,y0,v0, x1,y1,v1, ...]. Drops field names
+    // (`x`, `y`, `value`) and the rarely-used `mine` flag — value == -1
+    // already encodes a mine, which is all the client reducer looks at.
+    final flat = List<int>.filled(cells.length * 3, 0);
+    for (var i = 0; i < cells.length; i++) {
+      final c = cells[i];
+      flat[i * 3] = c.x;
+      flat[i * 3 + 1] = c.y;
+      flat[i * 3 + 2] = c.value;
+    }
+    return {
+      'cells': flat,
+      'byPlayerId': byPlayerId,
+    };
+  }
+}
+
+/// Decodes either the packed v4 form (flat int triplets) or the legacy v3
+/// form (array of `{x,y,value,mine?}` maps), so a client running this build
+/// can still talk to a host that hasn't been upgraded yet.
+List<Reveal> _decodeReveals(Object? raw) {
+  if (raw is! List) return const [];
+  if (raw.isEmpty) return const [];
+  final first = raw.first;
+  if (first is num) {
+    // Packed: [x,y,v, x,y,v, ...]
+    final out = <Reveal>[];
+    for (var i = 0; i + 2 < raw.length; i += 3) {
+      final x = (raw[i] as num).toInt();
+      final y = (raw[i + 1] as num).toInt();
+      final v = (raw[i + 2] as num).toInt();
+      out.add(Reveal(x: x, y: y, value: v, isMine: v == -1));
+    }
+    return out;
+  }
+  // Legacy maps.
+  return raw
+      .cast<Map>()
+      .map((m) => Reveal.fromJson(m.cast<String, dynamic>()))
+      .toList();
 }
 
 class SFlagged extends ServerMessage {
@@ -558,6 +605,32 @@ class SError extends ServerMessage {
   Map<String, dynamic> _payload() => {'code': code, 'message': message};
 }
 
+/// Partial player update — used for high-frequency lobby changes (ready
+/// toggles, going-offline / coming-back) so we don't have to re-broadcast the
+/// whole [SLobby] every time. Any field left null is unchanged.
+class SPlayerPatch extends ServerMessage {
+  const SPlayerPatch({
+    required this.playerId,
+    this.isReady,
+    this.isOffline,
+    this.name,
+  });
+  final String playerId;
+  final bool? isReady;
+  final bool? isOffline;
+  final String? name;
+
+  @override
+  String get _type => 'playerPatch';
+  @override
+  Map<String, dynamic> _payload() => {
+        'playerId': playerId,
+        if (isReady != null) 'isReady': isReady,
+        if (isOffline != null) 'isOffline': isOffline,
+        if (name != null) 'name': name,
+      };
+}
+
 /// Host's reply to [CPing]. Lets the guest's watchdog confirm the socket is
 /// still alive end-to-end (not just at the TCP layer).
 class SPong extends ServerMessage {
@@ -611,6 +684,7 @@ class SSnapshot extends ServerMessage {
     required this.flags,
     required this.hearts,
     required this.stats,
+    this.heartsLostBy = const [],
     this.rejoinToken,
   });
 
@@ -620,6 +694,11 @@ class SSnapshot extends ServerMessage {
   final List<FlagEntry> flags;
   final int hearts;
   final Map<String, PlayerStats> stats;
+
+  /// Chronological list of player ids that lost each heart so far
+  /// (length = initialHearts - hearts). Needed on rejoin so the catch-up
+  /// guest can render the same per-heart attribution as everyone else.
+  final List<String> heartsLostBy;
 
   /// Echoes back the token the host has on file for this player (whether
   /// freshly minted or reused on a rejoin). Guests store it for the next
@@ -634,6 +713,7 @@ class SSnapshot extends ServerMessage {
         'flags': flags.map((f) => f.toJson()).toList(),
         'hearts': hearts,
         'stats': stats.map((k, v) => MapEntry(k, v.toJson())),
+        if (heartsLostBy.isNotEmpty) 'heartsLostBy': heartsLostBy,
         if (rejoinToken != null) 'rejoinToken': rejoinToken,
       };
 }
