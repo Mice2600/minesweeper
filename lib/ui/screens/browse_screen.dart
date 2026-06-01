@@ -8,8 +8,10 @@ import 'package:flutter/services.dart'
         TextInputFormatter;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 import '../../state/session.dart';
+import '../widgets/game_panel.dart';
 
 class BrowseScreen extends ConsumerStatefulWidget {
   const BrowseScreen({super.key});
@@ -82,8 +84,7 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen> {
                   LengthLimitingTextInputFormatter(5),
                   _UppercaseFormatter(),
                 ],
-                style: const TextStyle(
-                  fontFamily: 'monospace',
+                style: GoogleFonts.jetBrainsMono(
                   fontSize: 20,
                   letterSpacing: 4,
                   fontWeight: FontWeight.w700,
@@ -114,13 +115,36 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen> {
                 ),
                 const SizedBox(height: 10),
                 if (hosts.isEmpty)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 24),
-                    child: Center(
-                      child: Text(
-                        'Searching…',
-                        style: TextStyle(color: cs.onSurfaceVariant),
+                  Container(
+                    margin: const EdgeInsets.symmetric(vertical: 4),
+                    padding: const EdgeInsets.symmetric(vertical: 28),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(18),
+                      border: Border.all(
+                        color: cs.outlineVariant,
+                        style: BorderStyle.solid,
                       ),
+                    ),
+                    child: Column(
+                      children: [
+                        Icon(Icons.radar_rounded,
+                            size: 36, color: cs.onSurfaceVariant),
+                        const SizedBox(height: 10),
+                        Text(
+                          'Looking for nearby games…',
+                          style: TextStyle(
+                            color: cs.onSurfaceVariant,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'Make sure you’re on the same Wi-Fi as the host.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                              color: cs.onSurfaceVariant, fontSize: 12),
+                        ),
+                      ],
                     ),
                   )
                 else
@@ -131,14 +155,18 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen> {
                     separatorBuilder: (_, __) => const SizedBox(height: 8),
                     itemBuilder: (_, i) {
                       final h = hosts[i];
-                      return Card(
+                      return GamePanel(
+                        clipBehavior: Clip.antiAlias,
+                        radius: 18,
                         child: ListTile(
-                          leading:
-                              const Icon(Icons.wifi_tethering_rounded),
-                          title: Text(h.name),
+                          leading: Icon(Icons.wifi_tethering_rounded,
+                              color: cs.primary),
+                          title: Text(h.name,
+                              style: const TextStyle(
+                                  fontWeight: FontWeight.w700)),
                           subtitle: Text('${h.host}:${h.port}'),
                           trailing:
-                              const Icon(Icons.arrow_forward_ios_rounded),
+                              const Icon(Icons.arrow_forward_ios_rounded, size: 16),
                           onTap: () => _connectLan(h.wsUri.toString()),
                         ),
                       );
@@ -157,7 +185,7 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen> {
                   hintText: 'ws://192.168.1.10:8080',
                   prefixIcon: Icon(Icons.link_rounded),
                 ),
-                style: const TextStyle(fontFamily: 'monospace'),
+                style: GoogleFonts.jetBrainsMono(),
                 onSubmitted: _connectLan,
               ),
               const SizedBox(height: 12),

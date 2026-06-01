@@ -4,22 +4,30 @@ import 'dart:math' as math;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
+import '../../app/theme.dart';
 import '../../audio/sfx.dart';
 import '../../game/difficulty.dart';
 import '../../game/engine.dart';
 import '../../state/session.dart';
+import '../../state/skin.dart';
 import '../widgets/avatar.dart';
 import '../widgets/board_view.dart';
+import '../widgets/chat_button.dart';
+import '../widgets/chat_overlay.dart';
 import '../widgets/connection_overlay.dart';
 import '../widgets/emoji_bar.dart';
 import '../widgets/emoji_overlay.dart';
 import '../widgets/hearts_bar.dart';
+import '../widgets/how_to_play.dart';
+import '../widgets/particles.dart';
 import '../widgets/screen_shake.dart';
+import '../widgets/skin_picker.dart';
 
 class GameScreen extends ConsumerStatefulWidget {
   const GameScreen({super.key});
@@ -101,6 +109,16 @@ class _GameScreenState extends ConsumerState<GameScreen> {
             );
       }
       if (prevStatus != nextStatus) _syncWakelock(nextStatus);
+
+      // Guest only: the host restarted the round, so the finished board drops
+      // back to `waiting`. Leave the stale game-over board and wait in the
+      // lobby view — the join screen forwards us into the new game once the
+      // host starts it.
+      if (!next.isHost &&
+          (prevStatus == GameStatus.won || prevStatus == GameStatus.lost) &&
+          nextStatus == GameStatus.waiting) {
+        context.go('/join');
+      }
     });
 
     // Start the timer on the first uncovered cell, not on game-start: the
@@ -133,14 +151,12 @@ class _GameScreenState extends ConsumerState<GameScreen> {
     final gameEnded = snap.status == GameStatus.won ||
         snap.status == GameStatus.lost;
 
+    final won = snap.status == GameStatus.won;
+
+    final skin = ref.watch(boardSkinProvider);
+
     return Scaffold(
-      floatingActionButton: gameEnded
-          ? FloatingActionButton.extended(
-              onPressed: () => context.go('/result'),
-              icon: const Icon(Icons.bar_chart_rounded),
-              label: const Text('See results'),
-            )
-          : null,
+      backgroundColor: Colors.transparent,
       appBar: AppBar(
         leading: IconButton(
           icon: const Icon(Icons.close_rounded),
@@ -150,18 +166,18 @@ class _GameScreenState extends ConsumerState<GameScreen> {
             context.go('/');
           },
         ),
-        title: Row(
-          children: [
-            _StatBubble(icon: Icons.flag_rounded, value: '$flagsRemaining'),
-            const SizedBox(width: 8),
-            _ElapsedStatBubble(startedAt: _startedAt),
-            const SizedBox(width: 8),
-            _StatBubble(
-                icon: Icons.grid_4x4_rounded,
-                value: '${snap.width}×${snap.height}'),
-          ],
-        ),
         actions: [
+          const ChatButton(),
+          IconButton(
+            tooltip: 'Board skin',
+            onPressed: () => showSkinPicker(context, ref),
+            icon: const Icon(Icons.palette_outlined),
+          ),
+          IconButton(
+            tooltip: 'How to play',
+            onPressed: () => showHowToPlay(context),
+            icon: const Icon(Icons.help_outline_rounded),
+          ),
           IconButton(
             tooltip: ref.watch(mutedProvider) ? 'Unmute' : 'Mute',
             onPressed: () => ref.read(mutedProvider.notifier).toggle(),
@@ -179,6 +195,11 @@ class _GameScreenState extends ConsumerState<GameScreen> {
             Column(
           children: [
             _ConnectionBanner(state: s.connectionState),
+            _HudBar(
+              flagsRemaining: flagsRemaining,
+              startedAt: _startedAt,
+              boardLabel: '${snap.width}×${snap.height}',
+            ),
             if (snap.config.mode == GameMode.hearts)
               Padding(
                 padding: const EdgeInsets.symmetric(vertical: 4),
@@ -204,6 +225,7 @@ class _GameScreenState extends ConsumerState<GameScreen> {
                     final board = BoardView(
                       snapshot: snap,
                       cellSize: cellSize,
+                      skin: skin,
                       interactive: snap.status == GameStatus.playing ||
                           snap.status == GameStatus.waiting,
                       onReveal: (x, y) {
@@ -239,17 +261,40 @@ class _GameScreenState extends ConsumerState<GameScreen> {
                 ),
               ),
             ),
-            if (gameEnded)
-              _GameOverHint(won: snap.status == GameStatus.won),
+            if (!gameEnded && !firstRevealLanded) const _CoachHint(),
             Padding(
-              padding: const EdgeInsets.all(12),
-              child: EmojiBar(
-                onSend: (e) =>
-                    ref.read(sessionProvider.notifier).sendEmoji(e),
-              ),
+              padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
+              child: gameEnded
+                  // Side-by-side so the results CTA is always visible and
+                  // never floats over the emoji bar (notably in landscape).
+                  ? Row(
+                      children: [
+                        Expanded(
+                          child: SingleChildScrollView(
+                            scrollDirection: Axis.horizontal,
+                            child: EmojiBar(
+                              onSend: (e) => ref
+                                  .read(sessionProvider.notifier)
+                                  .sendEmoji(e),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        _SeeResultsButton(
+                          won: won,
+                          onTap: () => context.go('/result'),
+                        ),
+                      ],
+                    )
+                  : EmojiBar(
+                      onSend: (e) =>
+                          ref.read(sessionProvider.notifier).sendEmoji(e),
+                    ),
             ),
           ],
             ),
+            if (gameEnded && won)
+              const Positioned.fill(child: IgnorePointer(child: Confetti())),
             Positioned.fill(
               child: ConnectionOverlay(
                 state: s.connectionState,
@@ -260,6 +305,7 @@ class _GameScreenState extends ConsumerState<GameScreen> {
                 },
               ),
             ),
+            const ChatOverlay(),
           ],
         ),
       ),
@@ -301,33 +347,164 @@ String _format(Duration d) {
   return '$m:$s';
 }
 
-class _StatBubble extends StatelessWidget {
-  const _StatBubble({required this.icon, required this.value});
-  final IconData icon;
-  final String value;
+/// Full-width in-game HUD: mine counter, a prominent timer, and the board
+/// size. Lives in the body (not the cramped app bar) so the stats — the timer
+/// especially — are big and legible in both portrait and landscape.
+class _HudBar extends StatelessWidget {
+  const _HudBar({
+    required this.flagsRemaining,
+    required this.startedAt,
+    required this.boardLabel,
+  });
+  final int flagsRemaining;
+  final DateTime? startedAt;
+  final String boardLabel;
+
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 2),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          _StatBubble(
+            icon: Icons.flag_rounded,
+            value: '$flagsRemaining',
+            tint: cs.secondary,
+          ),
+          const SizedBox(width: 10),
+          // The hero stat — big and accented.
+          _ElapsedStatBubble(startedAt: startedAt, big: true),
+          const SizedBox(width: 10),
+          _StatBubble(icon: Icons.grid_4x4_rounded, value: boardLabel),
+        ],
+      ),
+    );
+  }
+}
+
+class _StatBubble extends StatelessWidget {
+  const _StatBubble({
+    required this.icon,
+    required this.value,
+    this.tint,
+    this.big = false,
+  });
+  final IconData icon;
+  final String value;
+  final Color? tint;
+  final bool big;
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final g = Theme.of(context).extension<GamePalette>() ?? GamePalette.light;
+    final accent = tint ?? cs.onSurfaceVariant;
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      padding: EdgeInsets.symmetric(
+          horizontal: big ? 16 : 11, vertical: big ? 9 : 7),
       decoration: BoxDecoration(
-        color: cs.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(12),
+        color: g.panel,
+        borderRadius: BorderRadius.circular(big ? 16 : 13),
+        border: Border.all(
+          color: big ? accent.withValues(alpha: 0.55) : g.panelBorder,
+          width: big ? 1.6 : 1,
+        ),
+        boxShadow: [
+          BoxShadow(
+              color: g.panelShadow,
+              blurRadius: big ? 12 : 8,
+              offset: const Offset(0, 3)),
+        ],
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 16, color: cs.onSurfaceVariant),
-          const SizedBox(width: 6),
+          Icon(icon, size: big ? 22 : 16, color: accent),
+          SizedBox(width: big ? 9 : 6),
           Text(
             value,
             style: GoogleFonts.jetBrainsMono(
-              fontWeight: FontWeight.w700,
-              fontSize: 14,
+              fontWeight: FontWeight.w800,
+              fontSize: big ? 26 : 15,
+              height: 1.0,
+              color: cs.onSurface,
             ),
           ),
         ],
       ),
+    );
+  }
+}
+
+/// The prominent end-of-round CTA. Sits inline next to the emoji bar so it is
+/// always visible and never floats over it.
+class _SeeResultsButton extends StatelessWidget {
+  const _SeeResultsButton({required this.won, required this.onTap});
+  final bool won;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final color = won ? AppPalette.leaf : cs.secondary;
+    final fg = won ? Colors.white : cs.onSecondary;
+    return FilledButton.icon(
+      onPressed: onTap,
+      style: FilledButton.styleFrom(
+        backgroundColor: color,
+        foregroundColor: fg,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      ),
+      icon: const Icon(Icons.emoji_events_rounded, size: 20),
+      label: Text(won ? 'See your win' : 'See results'),
+    )
+        .animate(onPlay: (c) => c.repeat(reverse: true))
+        .scaleXY(begin: 1, end: 1.04, duration: 900.ms, curve: Curves.easeInOut);
+  }
+}
+
+/// A gentle first-timer nudge shown until the first square is dug. Tells a new
+/// player exactly what to do without a wall of text.
+class _CoachHint extends StatelessWidget {
+  const _CoachHint();
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final g = Theme.of(context).extension<GamePalette>() ?? GamePalette.light;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+        decoration: BoxDecoration(
+          color: g.panel,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: cs.primary.withValues(alpha: 0.35)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.touch_app_rounded, size: 18, color: cs.primary),
+            const SizedBox(width: 8),
+            Flexible(
+              child: Text(
+                'Tap any square to start digging · long-press to flag',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: cs.onSurface,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 12.5,
+                ),
+              ),
+            ),
+          ],
+        ),
+      )
+          .animate(onPlay: (c) => c.repeat(reverse: true))
+          .fadeIn(duration: 300.ms)
+          .then()
+          .scaleXY(begin: 1, end: 1.02, duration: 1100.ms, curve: Curves.easeInOut),
     );
   }
 }
@@ -372,9 +549,14 @@ class _PlayersBar extends StatelessWidget {
                     color: Color(p.color),
                   ),
                   const SizedBox(width: 8),
-                  Text(
-                    isMe ? '${p.name} (you)' : p.name,
-                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 140),
+                    child: Text(
+                      isMe ? '${p.name} (you)' : p.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
                   ),
                   if (offline) ...[
                     const SizedBox(width: 6),
@@ -406,46 +588,12 @@ class _ConnectionBanner extends StatelessWidget {
   Widget build(BuildContext context) => const SizedBox.shrink();
 }
 
-class _GameOverHint extends StatelessWidget {
-  const _GameOverHint({required this.won});
-  final bool won;
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final accent = won ? cs.primary : cs.error;
-    final text = won
-        ? 'All clear! Look around, then see results.'
-        : 'Mine hit. Look around, then see results.';
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(
-            won ? Icons.celebration_rounded : Icons.warning_amber_rounded,
-            size: 16,
-            color: accent,
-          ),
-          const SizedBox(width: 6),
-          Text(
-            text,
-            style: TextStyle(
-              fontWeight: FontWeight.w600,
-              color: accent,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 /// Owns its own 200 ms timer and rebuilds only the timer bubble — so a clock
 /// tick doesn't drag the whole BoardView (1000+ cells) through a rebuild.
 class _ElapsedStatBubble extends StatefulWidget {
-  const _ElapsedStatBubble({required this.startedAt});
+  const _ElapsedStatBubble({required this.startedAt, this.big = false});
   final DateTime? startedAt;
+  final bool big;
 
   @override
   State<_ElapsedStatBubble> createState() => _ElapsedStatBubbleState();
@@ -498,6 +646,8 @@ class _ElapsedStatBubbleState extends State<_ElapsedStatBubble> {
     return _StatBubble(
       icon: Icons.timer_outlined,
       value: _format(_elapsed),
+      tint: Theme.of(context).colorScheme.tertiary,
+      big: widget.big,
     );
   }
 }
@@ -594,9 +744,9 @@ class _BoardCameraState extends State<_BoardCamera>
     // pre-multiply with `base` via `.multiplied(base)`.
     final focal = event.localPosition;
     final zoom = Matrix4.identity()
-      ..translate(focal.dx, focal.dy)
-      ..scale(actualChange)
-      ..translate(-focal.dx, -focal.dy);
+      ..translateByDouble(focal.dx, focal.dy, 0, 1)
+      ..scaleByDouble(actualChange, actualChange, actualChange, 1)
+      ..translateByDouble(-focal.dx, -focal.dy, 0, 1);
     final newMatrix = zoom.multiplied(base);
 
     _zoomBegin = Matrix4.copy(_controller.value);

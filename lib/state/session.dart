@@ -15,6 +15,7 @@ import '../net/messages.dart';
 import '../net/relay_transport.dart';
 import '../net/server.dart';
 import '../net/transport.dart';
+import 'chat.dart';
 import 'host_session.dart';
 
 /// All UI-facing game state derived from server messages.
@@ -321,6 +322,7 @@ class SessionNotifier extends Notifier<SessionState> {
     Difficulty difficulty = Difficulty.easy,
     HostMode mode = HostMode.lan,
   }) async {
+    ref.read(chatProvider.notifier).clear();
     state = state.copyWith(
       isHost: true,
       connectionState: SessionConnState.connecting,
@@ -433,6 +435,7 @@ class SessionNotifier extends Notifier<SessionState> {
       }
     }
 
+    ref.read(chatProvider.notifier).clear();
     _joinName = name;
     _joinAvatarSeed = avatarSeed;
     _joinMode = mode;
@@ -611,6 +614,11 @@ class SessionNotifier extends Notifier<SessionState> {
   void sendCursor(double nx, double ny) => _send(CCursor(nx: nx, ny: ny));
   void clearCursor() => _send(const CCursorLeave());
   void sendEmoji(String code) => _send(CEmoji(code: code));
+  void sendChat(String text) {
+    final t = text.trim();
+    if (t.isEmpty) return;
+    _send(CChat(text: t));
+  }
   void sendReady(bool ready) => _send(CReady(ready: ready));
   void sendRestart() => _send(const CRestart());
 
@@ -627,6 +635,7 @@ class SessionNotifier extends Notifier<SessionState> {
 
   Future<void> leave() async {
     _clearReconnectState();
+    ref.read(chatProvider.notifier).clear();
     await _guestSub?.cancel();
     _guestSub = null;
     await _hostLocalSub?.cancel();
@@ -832,12 +841,23 @@ class SessionNotifier extends Notifier<SessionState> {
         state = state.copyWith(snapshot: snap.copyWith(cursors: newCursors));
       case SEmoji(:final playerId, :final code):
         ref.read(emojiBurstProvider.notifier).push(playerId, code);
+      case SChat(:final playerId, :final name, :final text, :final ts):
+        ref.read(chatProvider.notifier).receive(
+              playerId: playerId,
+              name: name,
+              text: text,
+              ts: ts,
+              mine: playerId == state.localId,
+            );
       case SError(:final message):
         state = state.copyWith(errorMessage: message);
       case SPong():
         // Heartbeat ack is normally filtered inside the guest transport, but
         // a stray pong over LAN would still need a no-op case so the
         // exhaustive switch keeps compiling.
+        return;
+      case SUnknown():
+        // A message type this build doesn't recognize (newer host). Ignore.
         return;
       case SSnapshot(
           :final cells,

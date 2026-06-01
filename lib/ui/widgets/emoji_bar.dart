@@ -1,10 +1,21 @@
 import 'package:flutter/material.dart';
 
+/// Font fallbacks so emoji render as proper colour glyphs even though the app's
+/// default text theme is Nunito (which has no emoji). Flutter tries the primary
+/// family per-glyph, then walks these for anything missing.
+const emojiFontFallback = <String>[
+  'Apple Color Emoji', // iOS / macOS
+  'Segoe UI Emoji', // Windows
+  'Noto Color Emoji', // Android / Linux / web
+  'Noto Emoji',
+  'EmojiOne Color',
+];
+
 class EmojiBar extends StatelessWidget {
   const EmojiBar({super.key, required this.onSend});
   final ValueChanged<String> onSend;
 
-  static const _emojis = ['🎉', '👍', '🤔', '😱', '🚩', '😅'];
+  static const _emojis = ['👍', '❤️', '😂', '😮', '🎉', '🤔', '🚩', '💣'];
 
   @override
   Widget build(BuildContext context) {
@@ -21,7 +32,13 @@ class EmojiBar extends StatelessWidget {
             .map((e) => IconButton(
                   visualDensity: VisualDensity.compact,
                   onPressed: () => onSend(e),
-                  icon: Text(e, style: const TextStyle(fontSize: 20)),
+                  icon: Text(
+                    e,
+                    style: const TextStyle(
+                      fontSize: 20,
+                      fontFamilyFallback: emojiFontFallback,
+                    ),
+                  ),
                 ))
             .toList(),
       ),

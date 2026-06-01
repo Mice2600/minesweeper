@@ -3,6 +3,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../state/session.dart';
+import '../widgets/chat_button.dart';
+import '../widgets/chat_overlay.dart';
+import '../widgets/emoji_bar.dart';
+import '../widgets/emoji_overlay.dart';
+import '../widgets/match_summary.dart';
 import '../widgets/player_chip.dart';
 
 class JoinScreen extends ConsumerStatefulWidget {
@@ -70,11 +75,25 @@ class _JoinScreenState extends ConsumerState<JoinScreen> {
             context.go('/');
           },
         ),
+        actions: const [ChatButton()],
       ),
       body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: _buildBody(s),
+        child: Stack(
+          children: [
+            Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 520),
+                child: Padding(
+                  padding: const EdgeInsets.all(20),
+                  child: _buildBody(s),
+                ),
+              ),
+            ),
+            // Lets waiting players see each other's reactions before the
+            // game starts.
+            const Positioned.fill(child: IgnorePointer(child: EmojiOverlay())),
+            const ChatOverlay(),
+          ],
         ),
       ),
     );
@@ -82,13 +101,22 @@ class _JoinScreenState extends ConsumerState<JoinScreen> {
 
   Widget _buildBody(SessionState s) {
     if (s.connectionState == SessionConnState.connecting) {
-      return const Center(
+      final cs = Theme.of(context).colorScheme;
+      return Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            CircularProgressIndicator(),
-            SizedBox(height: 16),
-            Text('Connecting…'),
+            const CircularProgressIndicator(),
+            const SizedBox(height: 18),
+            Text(
+              'Connecting…',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Knocking on the host’s door',
+              style: TextStyle(color: cs.onSurfaceVariant, fontSize: 13),
+            ),
           ],
         ),
       );
@@ -112,12 +140,25 @@ class _JoinScreenState extends ConsumerState<JoinScreen> {
       );
     }
     final players = s.snapshot?.players ?? const [];
+    final cs = Theme.of(context).colorScheme;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Text('Waiting for host to start…',
-            style: Theme.of(context).textTheme.titleMedium),
-        const SizedBox(height: 12),
+        Row(
+          children: [
+            Icon(Icons.check_circle_rounded, color: cs.primary, size: 22),
+            const SizedBox(width: 8),
+            Text("You're in!",
+                style: Theme.of(context).textTheme.titleLarge),
+          ],
+        ),
+        const SizedBox(height: 4),
+        Text('Hang tight while the host sets up the board.',
+            style: TextStyle(color: cs.onSurfaceVariant)),
+        const SizedBox(height: 18),
+        // Live view of what the host is choosing — updates as they change it.
+        MatchSummary(config: s.config),
+        const SizedBox(height: 18),
         Text('Players (${players.length}/4)',
             style: Theme.of(context).textTheme.titleSmall),
         const SizedBox(height: 8),
@@ -132,7 +173,38 @@ class _JoinScreenState extends ConsumerState<JoinScreen> {
               .toList(),
         ),
         const Spacer(),
-        const Center(child: CircularProgressIndicator()),
+        Center(
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: EmojiBar(
+              onSend: (e) =>
+                  ref.read(sessionProvider.notifier).sendEmoji(e),
+            ),
+          ),
+        ),
+        const SizedBox(height: 14),
+        Center(
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(
+                    strokeWidth: 2.5, color: cs.primary),
+              ),
+              const SizedBox(width: 10),
+              Text(
+                'Waiting for host to start…',
+                style: TextStyle(
+                  color: cs.onSurfaceVariant,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
       ],
     );
   }

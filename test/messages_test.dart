@@ -16,6 +16,7 @@ void main() {
       const CChord(x: 1, y: 1),
       const CCursor(nx: 0.5, ny: 0.25),
       const CEmoji(code: '🎉'),
+      const CChat(text: 'hello world'),
       const CRestart(),
       const CLeave(),
     ];
@@ -32,7 +33,7 @@ void main() {
 
   group('ServerMessage round-trip', () {
     final cases = <ServerMessage>[
-      const SWelcome(yourId: 'abc', protocol: 4),
+      const SWelcome(yourId: 'abc', protocol: 5),
       SLobby(
         hostId: 'h',
         players: const [
@@ -66,6 +67,7 @@ void main() {
       ),
       const SCursor(playerId: 'h', nx: 0.1, ny: 0.9),
       const SEmoji(playerId: 'h', code: '👍'),
+      const SChat(playerId: 'h', name: 'Host', text: 'hi all', ts: 1234567890),
       const SError(code: 'oops', message: 'something happened'),
       const SHeartsChanged(
         hearts: 2,

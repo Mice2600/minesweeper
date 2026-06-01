@@ -39,7 +39,12 @@ class RevealShareDonut extends StatelessWidget {
           titleStyle: GoogleFonts.jetBrainsMono(
             fontSize: 12,
             fontWeight: FontWeight.w700,
-            color: Colors.white,
+            // Pick the label color from the slice luminance so a light player
+            // color (amber/cyan) doesn't get an unreadable white '%'.
+            color: ThemeData.estimateBrightnessForColor(Color(e.player.color)) ==
+                    Brightness.dark
+                ? Colors.white
+                : const Color(0xFF1A1A1A),
           ),
           borderSide: BorderSide(color: cs.surface, width: 2),
         ),
@@ -299,7 +304,8 @@ class CumulativeRevealsLine extends StatelessWidget {
               radius: 4,
               color: cs.error,
               strokeWidth: 1.5,
-              strokeColor: cs.surface,
+              // Match the _ChartCard fill these charts sit on, not raw surface.
+              strokeColor: cs.surfaceContainerHighest,
             ),
           ),
         ),

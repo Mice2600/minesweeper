@@ -4,6 +4,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../app/board_skin.dart';
 import '../../game/engine.dart';
 import '../../state/session.dart';
 import 'cell_tile.dart';
@@ -18,6 +19,7 @@ class BoardView extends StatefulWidget {
     super.key,
     required this.snapshot,
     required this.cellSize,
+    required this.skin,
     required this.onReveal,
     required this.onFlag,
     required this.onChord,
@@ -27,6 +29,9 @@ class BoardView extends StatefulWidget {
   });
 
   final GameSnapshot snapshot;
+
+  /// Color set for the board map.
+  final BoardSkin skin;
 
   /// Pixel size of a single cell. Sized by the parent so the layout can be
   /// computed once with full visibility of viewport insets, padding, etc.
@@ -204,11 +209,21 @@ class _BoardViewState extends State<BoardView> {
                   : null,
               child: Stack(
                 children: [
+                  // Board background shows through cell gaps (tile/neumorphic).
+                  // Transparent for full-bleed structures, so nothing mounts and
+                  // the grid covers everything exactly as before.
+                  if (widget.skin.boardBackground != Colors.transparent)
+                    Positioned.fill(
+                      child: ColoredBox(color: widget.skin.boardBackground),
+                    ),
                   CustomMultiChildLayout(
                     delegate: _GridLayout(
                       width: w,
                       height: h,
                       cell: cellSize,
+                      // Gap structures must not overlap or the overlap eats the
+                      // gap; full-bleed structures keep the seam-hiding overlap.
+                      overdraw: widget.skin.cellGapFrac > 0 ? 0.0 : 0.75,
                     ),
                     children: [
                       for (var y = 0; y < h; y++)
@@ -223,6 +238,7 @@ class _BoardViewState extends State<BoardView> {
                                 flagColor: _flagColor(x, y),
                                 questionColor: _questionColor(x, y),
                                 size: cellSize,
+                                skin: widget.skin,
                                 highlight: _isLastEvent(x, y),
                                 pulsing: _pulseIndices.contains(y * w + x),
                                 won: won,
@@ -232,26 +248,37 @@ class _BoardViewState extends State<BoardView> {
                           ),
                     ],
                   ),
-                  IgnorePointer(
-                    child: CustomPaint(
-                      size: Size(boardWidth, boardHeight),
-                      painter: _BoardEdgesPainter(
-                        displayValues: [
-                          for (var i = 0; i < w * h; i++)
-                            _displayValue(i % w, i ~/ w),
-                        ],
-                        width: w,
-                        height: h,
-                        cell: cellSize,
+                  // The painted "cliff" edge only makes sense for the grass
+                  // structure; other structures draw their own per-cell
+                  // borders/bevels in CellTile.
+                  if (widget.skin.structure == CellStructure.grass)
+                    IgnorePointer(
+                      child: RepaintBoundary(
+                        child: CustomPaint(
+                          size: Size(boardWidth, boardHeight),
+                          painter: _BoardEdgesPainter(
+                            displayValues: [
+                              for (var i = 0; i < w * h; i++)
+                                _displayValue(i % w, i ~/ w),
+                            ],
+                            width: w,
+                            height: h,
+                            cell: cellSize,
+                            edgeColor: widget.skin.hiddenEdge,
+                          ),
+                        ),
                       ),
                     ),
-                  ),
                   if (widget.snapshot.lastExplosion != null)
                     Positioned.fill(
-                      child: ExplosionOverlay(
-                        eventId: widget.snapshot.lastExplosion!.id,
-                        centers: widget.snapshot.lastExplosion!.centers,
-                        cellSize: cellSize,
+                      // Its own layer so the animated rings/debris don't share
+                      // (and re-rasterize) the static edge-stroke pass.
+                      child: RepaintBoundary(
+                        child: ExplosionOverlay(
+                          eventId: widget.snapshot.lastExplosion!.id,
+                          centers: widget.snapshot.lastExplosion!.centers,
+                          cellSize: cellSize,
+                        ),
                       ),
                     ),
                   ..._buildCursors(boardWidth, boardHeight),
@@ -343,7 +370,12 @@ class _BoardViewState extends State<BoardView> {
 }
 
 class _GridLayout extends MultiChildLayoutDelegate {
-  _GridLayout({required this.width, required this.height, required this.cell});
+  _GridLayout({
+    required this.width,
+    required this.height,
+    required this.cell,
+    this.overdraw = 0.75,
+  });
   final int width;
   final int height;
   final double cell;
@@ -351,8 +383,9 @@ class _GridLayout extends MultiChildLayoutDelegate {
   // Each cell overdraws by this much on the right and bottom so neighbors
   // overlap by a fraction of a pixel. At fractional InteractiveViewer zoom
   // levels this hides subpixel antialiasing seams between adjacent cells
-  // (which otherwise appear as thin bright lines through the grid).
-  static const double _overdraw = 0.75;
+  // (which otherwise appear as thin bright lines through the grid). Gap
+  // structures pass 0 so the overlap doesn't eat their intentional gap.
+  final double overdraw;
 
   @override
   void performLayout(Size size) {
@@ -360,8 +393,8 @@ class _GridLayout extends MultiChildLayoutDelegate {
       for (var x = 0; x < width; x++) {
         final id = y * width + x;
         if (!hasChild(id)) continue;
-        final extraW = x == width - 1 ? 0.0 : _overdraw;
-        final extraH = y == height - 1 ? 0.0 : _overdraw;
+        final extraW = x == width - 1 ? 0.0 : overdraw;
+        final extraH = y == height - 1 ? 0.0 : overdraw;
         layoutChild(id, BoxConstraints.tight(Size(cell + extraW, cell + extraH)));
         positionChild(id, Offset(x * cell, y * cell));
       }
@@ -370,7 +403,10 @@ class _GridLayout extends MultiChildLayoutDelegate {
 
   @override
   bool shouldRelayout(covariant _GridLayout old) =>
-      old.width != width || old.height != height || old.cell != cell;
+      old.width != width ||
+      old.height != height ||
+      old.cell != cell ||
+      old.overdraw != overdraw;
 }
 
 class _AnimatedCell extends StatelessWidget {
@@ -381,6 +417,7 @@ class _AnimatedCell extends StatelessWidget {
     required this.flagColor,
     required this.questionColor,
     required this.size,
+    required this.skin,
     required this.highlight,
     required this.pulsing,
     required this.won,
@@ -392,6 +429,7 @@ class _AnimatedCell extends StatelessWidget {
   final Color? flagColor;
   final Color? questionColor;
   final double size;
+  final BoardSkin skin;
   final bool highlight;
   final bool pulsing;
   final bool won;
@@ -405,6 +443,7 @@ class _AnimatedCell extends StatelessWidget {
       flagColor: flagColor,
       questionColor: questionColor,
       size: size,
+      skin: skin,
       highlight: highlight || pulsing,
       won: won,
       wasExploded: wasExploded,
@@ -422,12 +461,14 @@ class _BoardEdgesPainter extends CustomPainter {
     required this.width,
     required this.height,
     required this.cell,
+    required this.edgeColor,
   });
 
   final List<int> displayValues;
   final int width;
   final int height;
   final double cell;
+  final Color edgeColor;
 
   static const double _strokeWidth = 1.5;
 
@@ -439,7 +480,7 @@ class _BoardEdgesPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final paint = Paint()
-      ..color = CellTile.hiddenEdge
+      ..color = edgeColor
       ..strokeWidth = _strokeWidth
       ..style = PaintingStyle.stroke;
     for (var y = 0; y < height; y++) {
@@ -467,7 +508,10 @@ class _BoardEdgesPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _BoardEdgesPainter old) {
-    if (old.width != width || old.height != height || old.cell != cell) {
+    if (old.width != width ||
+        old.height != height ||
+        old.cell != cell ||
+        old.edgeColor != edgeColor) {
       return true;
     }
     final a = old.displayValues;

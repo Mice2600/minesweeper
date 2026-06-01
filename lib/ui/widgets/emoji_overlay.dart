@@ -3,6 +3,7 @@ import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../state/session.dart';
+import 'emoji_bar.dart' show emojiFontFallback;
 
 class EmojiOverlay extends ConsumerWidget {
   const EmojiOverlay({super.key});
@@ -40,7 +41,13 @@ class _BurstWidget extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(emoji, style: const TextStyle(fontSize: 56)),
+            Text(
+              emoji,
+              style: const TextStyle(
+                fontSize: 56,
+                fontFamilyFallback: emojiFontFallback,
+              ),
+            ),
             Text(playerName,
                 style: const TextStyle(fontWeight: FontWeight.w600)),
           ],

@@ -250,6 +250,16 @@ class HostSession {
             excludePlayerId: logicalId);
       case CEmoji(:final code):
         _broadcast(SEmoji(playerId: logicalId, code: code));
+      case CChat(:final text):
+        final clean = _sanitizeChat(text);
+        if (clean.isEmpty) return;
+        final author = _players[logicalId];
+        _broadcast(SChat(
+          playerId: logicalId,
+          name: author?.name ?? 'Player',
+          text: clean,
+          ts: DateTime.now().millisecondsSinceEpoch,
+        ));
       case CRestart():
         if (logicalId != hostId) return;
         _engine = null;
@@ -257,6 +267,9 @@ class HostSession {
       case CLeave():
         // The transport will surface a GuestDisconnected when the socket
         // closes; that path runs the grace timer and broadcasts the lobby.
+        break;
+      case CUnknown():
+        // A message type this build doesn't recognize (newer peer). Ignore.
         break;
     }
   }
@@ -464,4 +477,15 @@ class HostSession {
   ];
 
   int _colorFor(int idx) => _palette[idx % _palette.length];
+
+  /// Max chat length the host accepts; longer text is truncated.
+  static const _maxChatLen = 280;
+
+  /// Trim surrounding whitespace and cap length. Returns '' for anything that
+  /// would be empty, which the caller drops.
+  String _sanitizeChat(String raw) {
+    var t = raw.trim();
+    if (t.length > _maxChatLen) t = t.substring(0, _maxChatLen);
+    return t;
+  }
 }

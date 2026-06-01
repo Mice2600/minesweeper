@@ -10,7 +10,12 @@ import '../game/engine.dart';
 /// instead of an array of `{x,y,value,mine?}` maps. Same information, ~60%
 /// smaller on the wire — important for flood-fills that uncover hundreds of
 /// cells in one frame.
-const protocolVersion = 4;
+///
+/// v5: adds `CChat`/`SChat` (player text chat). Also makes both `decode`
+/// switches tolerant of unknown message types ([CUnknown]/[SUnknown]) so a
+/// future protocol addition no longer tears down a connection to a peer that
+/// hasn't been updated yet.
+const protocolVersion = 5;
 
 // ───────────────────────────────────────── Player ─────────────────────────────
 
@@ -108,9 +113,12 @@ sealed class ClientMessage {
         CCursor(nx: (d['nx'] as num).toDouble(), ny: (d['ny'] as num).toDouble()),
       'cursorLeave' => const CCursorLeave(),
       'emoji' => CEmoji(code: d['code'] as String),
+      'chat' => CChat(text: d['text'] as String),
       'restart' => const CRestart(),
       'leave' => const CLeave(),
-      _ => throw FormatException('unknown client message: $type'),
+      // Unknown types are kept (not thrown) so a newer peer's additions don't
+      // kill this connection — see [CUnknown].
+      _ => CUnknown(type),
     };
   }
 }
@@ -223,6 +231,29 @@ class CEmoji extends ClientMessage {
   Map<String, dynamic> _payload() => {'code': code};
 }
 
+/// Free-text chat from a guest → host. The host trims/caps it and re-broadcasts
+/// an authoritative [SChat] (with the author's name + timestamp) to everyone.
+class CChat extends ClientMessage {
+  const CChat({required this.text});
+  final String text;
+  @override
+  String get _type => 'chat';
+  @override
+  Map<String, dynamic> _payload() => {'text': text};
+}
+
+/// A client message whose `t` this build doesn't recognize. Produced by
+/// [ClientMessage.decode] instead of throwing, so forward-compat additions from
+/// a newer peer are ignored rather than dropping the connection. Never sent.
+class CUnknown extends ClientMessage {
+  const CUnknown(this.type);
+  final String type;
+  @override
+  String get _type => type;
+  @override
+  Map<String, dynamic> _payload() => const {};
+}
+
 class CRestart extends ClientMessage {
   const CRestart();
   @override
@@ -310,6 +341,12 @@ sealed class ServerMessage {
           playerId: d['playerId'] as String,
           code: d['code'] as String,
         ),
+      'chat' => SChat(
+          playerId: d['playerId'] as String,
+          name: d['name'] as String,
+          text: d['text'] as String,
+          ts: d['ts'] as int,
+        ),
       'error' =>
         SError(code: d['code'] as String, message: d['message'] as String),
       'hearts' => SHeartsChanged(
@@ -351,7 +388,9 @@ sealed class ServerMessage {
               ((d['heartsLostBy'] as List?) ?? const []).cast<String>(),
           rejoinToken: d['rejoinToken'] as String?,
         ),
-      _ => throw FormatException('unknown server message: $type'),
+      // Unknown types are kept (not thrown) so a newer host's additions don't
+      // kill this connection — see [SUnknown].
+      _ => SUnknown(type),
     };
   }
 }
@@ -593,6 +632,40 @@ class SEmoji extends ServerMessage {
   String get _type => 'emoji';
   @override
   Map<String, dynamic> _payload() => {'playerId': playerId, 'code': code};
+}
+
+/// Authoritative chat line broadcast by the host. [playerId] is the logical
+/// author id (resolve their live avatar/color via `GameSnapshot.playerById`);
+/// [name] is a snapshot of their name at send time (fallback if they later
+/// leave); [ts] is host epoch-ms, the single source of truth for ordering.
+class SChat extends ServerMessage {
+  const SChat({
+    required this.playerId,
+    required this.name,
+    required this.text,
+    required this.ts,
+  });
+  final String playerId;
+  final String name;
+  final String text;
+  final int ts;
+  @override
+  String get _type => 'chat';
+  @override
+  Map<String, dynamic> _payload() =>
+      {'playerId': playerId, 'name': name, 'text': text, 'ts': ts};
+}
+
+/// A server message whose `t` this build doesn't recognize. Produced by
+/// [ServerMessage.decode] instead of throwing, so forward-compat additions from
+/// a newer host are ignored rather than dropping the connection. Never sent.
+class SUnknown extends ServerMessage {
+  const SUnknown(this.type);
+  final String type;
+  @override
+  String get _type => type;
+  @override
+  Map<String, dynamic> _payload() => const {};
 }
 
 class SError extends ServerMessage {
