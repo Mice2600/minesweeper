@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../../state/session.dart';
 import '../widgets/chat_button.dart';
@@ -27,7 +28,17 @@ class _JoinScreenState extends ConsumerState<JoinScreen> {
   @override
   void initState() {
     super.initState();
+    // Keep the screen awake while connecting / waiting in the lobby, so a guest
+    // isn't dropped by the OS sleeping before the host starts the round. The
+    // game screen re-holds the lock once play begins.
+    WakelockPlus.enable();
     WidgetsBinding.instance.addPostFrameCallback((_) => _connect());
+  }
+
+  @override
+  void dispose() {
+    WakelockPlus.disable();
+    super.dispose();
   }
 
   Future<void> _connect() async {

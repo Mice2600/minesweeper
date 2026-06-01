@@ -1,13 +1,17 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import '../../app/board_skin.dart';
+import '../../app/skin_pricing.dart';
 import '../../state/skin.dart';
+import '../../state/store.dart';
 import 'cell_tile.dart';
 
-/// Opens a bottom sheet to pick the board skin. Selecting one applies it
-/// instantly (the board watches [boardSkinProvider]) and closes the sheet.
+/// Opens a bottom sheet to pick the board skin. Owned skins apply instantly
+/// (the board watches [boardSkinProvider]) and close the sheet. Locked skins
+/// show a lock + price; tapping one closes the sheet and opens the Store.
 Future<void> showSkinPicker(BuildContext context, WidgetRef ref) {
   return showModalBottomSheet<void>(
     context: context,
@@ -23,6 +27,7 @@ class _SkinPickerSheet extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final current = ref.watch(boardSkinProvider);
+    final store = ref.watch(storeProvider);
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
@@ -53,12 +58,19 @@ class _SkinPickerSheet extends ConsumerWidget {
                 itemCount: kBoardSkins.length,
                 itemBuilder: (ctx, i) {
                   final skin = kBoardSkins[i];
+                  final owned = store.owns(skin.id);
                   return _SkinCard(
                     skin: skin,
                     selected: skin.id == current.id,
+                    locked: !owned,
+                    price: skinPrice(skin),
                     onTap: () {
-                      ref.read(boardSkinProvider.notifier).select(skin);
                       Navigator.of(ctx).pop();
+                      if (owned) {
+                        ref.read(boardSkinProvider.notifier).select(skin);
+                      } else {
+                        ctx.push('/store');
+                      }
                     },
                   );
                 },
@@ -75,11 +87,15 @@ class _SkinCard extends StatelessWidget {
   const _SkinCard({
     required this.skin,
     required this.selected,
+    required this.locked,
+    required this.price,
     required this.onTap,
   });
 
   final BoardSkin skin;
   final bool selected;
+  final bool locked;
+  final int price;
   final VoidCallback onTap;
 
   @override
@@ -106,8 +122,9 @@ class _SkinCard extends StatelessWidget {
                 child: Stack(
                   fit: StackFit.expand,
                   children: [
-                    _SkinPreview(skin: skin),
-                    if (selected)
+                    SkinPreview(skin: skin),
+                    if (locked) _LockOverlay(price: price),
+                    if (selected && !locked)
                       Positioned(
                         top: 6,
                         right: 6,
@@ -145,11 +162,50 @@ class _SkinCard extends StatelessWidget {
   }
 }
 
+/// A scrim with a lock and price drawn over a locked skin's preview.
+class _LockOverlay extends StatelessWidget {
+  const _LockOverlay({required this.price});
+
+  final int price;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: Colors.black.withValues(alpha: 0.42),
+      alignment: Alignment.center,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.lock_rounded, color: Colors.white, size: 26),
+          const SizedBox(height: 4),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.monetization_on_rounded,
+                  color: Color(0xFFFFD54F), size: 15),
+              const SizedBox(width: 3),
+              Text(
+                '$price',
+                style: GoogleFonts.jetBrainsMono(
+                  color: Colors.white,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 /// A small live board snippet rendered with the REAL [CellTile], so each skin's
 /// structure (gaps, bevels, hairlines, glow) — not just its colors — shows in
-/// the picker. Truthful by construction: it shares the production render path.
-class _SkinPreview extends StatelessWidget {
-  const _SkinPreview({required this.skin});
+/// the picker and store. Truthful by construction: it shares the production
+/// render path.
+class SkinPreview extends StatelessWidget {
+  const SkinPreview({super.key, required this.skin});
 
   final BoardSkin skin;
 

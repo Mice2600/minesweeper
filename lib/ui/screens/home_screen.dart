@@ -9,6 +9,8 @@ import 'package:google_fonts/google_fonts.dart';
 import '../../app/theme.dart';
 import '../../net/relay_config.dart';
 import '../../state/session.dart';
+import '../../state/store.dart';
+import '../widgets/coin_pill.dart';
 import '../widgets/how_to_play.dart';
 import '../widgets/pressable.dart';
 
@@ -23,7 +25,9 @@ class HomeScreen extends ConsumerWidget {
     return Scaffold(
       backgroundColor: Colors.transparent,
       body: SafeArea(
-        child: LayoutBuilder(
+        child: Stack(
+          children: [
+            LayoutBuilder(
           builder: (context, constraints) {
             // Fit the panel to the available space instead of scrolling:
             // fill the width on phones (capped at 420), and scale the column
@@ -115,6 +119,15 @@ class HomeScreen extends ConsumerWidget {
                             onTap: () => context.go('/browse'),
                           ),
                         ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: _SquareButton(
+                            icon: Icons.storefront_rounded,
+                            label: 'Store',
+                            tone: cs.secondary,
+                            onTap: () => context.push('/store'),
+                          ),
+                        ),
                       ],
                     ).animate().fadeIn(delay: 550.ms).slideY(begin: 0.2, end: 0),
                     const SizedBox(height: 14),
@@ -148,8 +161,53 @@ class HomeScreen extends ConsumerWidget {
             );
           },
         ),
+            Positioned(
+              top: 8,
+              right: 12,
+              child: PressableScale(
+                onTap: () => context.push('/store'),
+                child: GestureDetector(
+                  onLongPress: () => _confirmReset(context, ref),
+                  child: CoinPill(coins: ref.watch(storeProvider).coins),
+                ),
+              ).animate().fadeIn(delay: 200.ms, duration: 400.ms),
+            ),
+          ],
+        ),
       ),
     );
+  }
+
+  Future<void> _confirmReset(BuildContext context, WidgetRef ref) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dctx) => AlertDialog(
+        title: Text('Reset coins & skins?', style: GoogleFonts.fredoka()),
+        content: const Text(
+          'Debug: restores 10000 coins and locks every skin except '
+          'Classic Grass.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dctx).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dctx).pop(true),
+            child: const Text('Reset'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !context.mounted) return;
+    ref.read(storeProvider.notifier).resetDebug();
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(const SnackBar(
+        content: Text('Coins & skins reset'),
+        behavior: SnackBarBehavior.floating,
+        duration: Duration(milliseconds: 1200),
+      ));
   }
 
   Future<void> _startSolo(WidgetRef ref, BuildContext context) async {

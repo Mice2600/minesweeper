@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:qr_flutter/qr_flutter.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../../app/theme.dart';
 import '../../game/difficulty.dart';
@@ -33,7 +34,17 @@ class _HostLobbyScreenState extends ConsumerState<HostLobbyScreen> {
   @override
   void initState() {
     super.initState();
+    // Keep the screen awake the whole time we're in the lobby: a host left
+    // waiting for friends must not let the OS sleep the device and drop the
+    // server / connection. The game screen re-holds it once play starts.
+    WakelockPlus.enable();
     WidgetsBinding.instance.addPostFrameCallback((_) => _ensureHosting());
+  }
+
+  @override
+  void dispose() {
+    WakelockPlus.disable();
+    super.dispose();
   }
 
   Future<void> _ensureHosting() async {
@@ -186,7 +197,10 @@ class _HostLobbyScreenState extends ConsumerState<HostLobbyScreen> {
                 );
 
                 return SingleChildScrollView(
-                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 20),
+                  // Add the bottom safe-area inset so the Start button / emoji
+                  // bar never sit under Android's gesture or 3-button nav bar.
+                  padding: EdgeInsets.fromLTRB(
+                      16, 12, 16, 20 + MediaQuery.paddingOf(context).bottom),
                   child: Center(
                     child: ConstrainedBox(
                       constraints: const BoxConstraints(maxWidth: 1040),

@@ -7,6 +7,7 @@ import '../ui/screens/home_screen.dart';
 import '../ui/screens/host_lobby_screen.dart';
 import '../ui/screens/join_screen.dart';
 import '../ui/screens/result_screen.dart';
+import '../ui/screens/store_screen.dart';
 
 final appRouter = GoRouter(
   initialLocation: '/',
@@ -26,5 +27,6 @@ final appRouter = GoRouter(
     }),
     GoRoute(path: '/game', builder: (_, __) => const GameScreen()),
     GoRoute(path: '/result', builder: (_, __) => const ResultScreen()),
+    GoRoute(path: '/store', builder: (_, __) => const StoreScreen()),
   ],
 );
