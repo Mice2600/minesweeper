@@ -136,6 +136,7 @@ class _AttributionBadge extends StatelessWidget {
       child: Avatar(
         seed: player.avatarSeed,
         label: player.name,
+        avatarData: player.avatarData,
         size: 18,
         color: Color(player.color),
       ),

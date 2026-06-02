@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "587214892395",
+    "project_id": "minesweeper-co-op",
+    "storage_bucket": "minesweeper-co-op.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:587214892395:android:5926a7c5a65bc4d410f02e",
+        "android_client_info": {
+          "package_name": "dev.lacon.minesweeper"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCfZgbW9j0r3FOtOhUUP_zbUgjj2pbfSsg"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

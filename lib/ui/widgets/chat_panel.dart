@@ -235,7 +235,7 @@ class _Bubble extends ConsumerWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Avatar(seed: seed, label: name, size: 26, color: color),
+          Avatar(seed: seed, label: name, avatarData: live?.avatarData, size: 26, color: color),
           const SizedBox(width: 8),
           Flexible(
             child: Column(

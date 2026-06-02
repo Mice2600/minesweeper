@@ -1,10 +1,15 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math';
 
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:image/image.dart' as img;
+import 'package:image_picker/image_picker.dart';
 
+import '../analytics/analytics.dart';
 import '../core/ids.dart';
+import '../core/prefs.dart';
 import '../game/board.dart';
 import '../game/difficulty.dart';
 import '../game/engine.dart';
@@ -15,6 +20,7 @@ import '../net/messages.dart';
 import '../net/relay_transport.dart';
 import '../net/server.dart';
 import '../net/transport.dart';
+import 'ad_gate.dart';
 import 'chat.dart';
 import 'host_session.dart';
 
@@ -272,6 +278,7 @@ class SessionNotifier extends Notifier<SessionState> {
   // restore their slot/stats inside its grace window.
   String? _joinName;
   String? _joinAvatarSeed;
+  String? _joinAvatarData;
   JoinMode? _joinMode;
   Uri? _joinLanUri;
   String? _joinRoomCode;
@@ -319,6 +326,7 @@ class SessionNotifier extends Notifier<SessionState> {
   Future<void> startHost({
     required String name,
     required String avatarSeed,
+    String? avatarData,
     Difficulty difficulty = Difficulty.easy,
     HostMode mode = HostMode.lan,
   }) async {
@@ -338,6 +346,7 @@ class SessionNotifier extends Notifier<SessionState> {
     final session = HostSession(
       hostName: name,
       hostAvatarSeed: avatarSeed,
+      hostAvatarData: avatarData,
       config: cfg,
       transport: transport,
     );
@@ -387,6 +396,7 @@ class SessionNotifier extends Notifier<SessionState> {
       roomCode: roomCode,
       connectionState: SessionConnState.lobby,
     );
+    Analytics.instance.hostStarted(mode: mode.name);
     // Re-broadcast lobby so this subscriber sees the initial state.
     session.broadcastLobby();
   }
@@ -409,6 +419,7 @@ class SessionNotifier extends Notifier<SessionState> {
   Future<void> joinHost({
     required String name,
     required String avatarSeed,
+    String? avatarData,
     JoinMode mode = JoinMode.lan,
     Uri? lanUri,
     String? roomCode,
@@ -438,10 +449,12 @@ class SessionNotifier extends Notifier<SessionState> {
     ref.read(chatProvider.notifier).clear();
     _joinName = name;
     _joinAvatarSeed = avatarSeed;
+    _joinAvatarData = avatarData;
     _joinMode = mode;
     _joinLanUri = lanUri;
     _joinRoomCode = normalizedRoomCode;
     _rejoinToken = shortId(20);
+    Analytics.instance.joinStarted(mode: mode.name);
     _reconnectAttempt = 0;
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
@@ -457,6 +470,7 @@ class SessionNotifier extends Notifier<SessionState> {
     final mode = _joinMode;
     final name = _joinName;
     final avatarSeed = _joinAvatarSeed;
+    final avatarData = _joinAvatarData;
     if (mode == null || name == null || avatarSeed == null) return;
 
     // Reset any prior transport before we open a new one.
@@ -488,6 +502,7 @@ class SessionNotifier extends Notifier<SessionState> {
         name: name,
         avatarSeed: avatarSeed,
         rejoinToken: _rejoinToken,
+        avatarData: avatarData,
       ));
       // Cleared once the join is acknowledged so the next drop starts at 1s.
       _reconnectAttempt = 0;
@@ -701,6 +716,14 @@ class SessionNotifier extends Notifier<SessionState> {
       case SGameStarted(:final config):
         final hostId = snap?.hostId ?? '';
         final players = snap?.players ?? const <PlayerInfo>[];
+        Analytics.instance.matchStarted(
+          mode: config.mode.name,
+          width: config.width,
+          height: config.height,
+          mines: config.mines,
+          hearts: config.initialHearts,
+          isHost: state.isHost,
+        );
         state = state.copyWith(
           config: config,
           snapshot: _emptySnapshot(
@@ -768,6 +791,13 @@ class SessionNotifier extends Notifier<SessionState> {
           final idx = p[1] * snap.width + p[0];
           newCells[idx] = -1;
         }
+        Analytics.instance.matchEnded(
+          won: won,
+          mode: state.config.mode.name,
+          durationMs: (endedAtMs - startedAtMs).clamp(0, 1 << 31),
+        );
+        // Count toward the interstitial cadence (shown on leaving the result).
+        ref.read(adGateProvider.notifier).registerFinishedMatch();
         state = state.copyWith(
           snapshot: snap.copyWith(
             status: won ? GameStatus.won : GameStatus.lost,
@@ -1018,24 +1048,104 @@ class DiscoveryNotifier extends Notifier<List<DiscoveredHost>> {
   }
 }
 
-/// Persists the player's preferred name (volatile for v1; kept on
-/// session-level only).
 final localProfileProvider =
     NotifierProvider<LocalProfileNotifier, LocalProfile>(
         LocalProfileNotifier.new);
 
 class LocalProfile {
-  const LocalProfile({required this.name, required this.avatarSeed});
+  const LocalProfile({
+    required this.name,
+    required this.avatarSeed,
+    this.avatarData,
+    this.preferredDifficulty = Difficulty.easy,
+  });
+
   final String name;
   final String avatarSeed;
+
+  /// Base64-encoded JPEG avatar photo (72×72, q70). Null = use seed gradient.
+  final String? avatarData;
+
+  /// Difficulty used by the Quick Play button.
+  final Difficulty preferredDifficulty;
+
+  LocalProfile copyWith({
+    String? name,
+    String? avatarSeed,
+    String? avatarData,
+    bool clearAvatarData = false,
+    Difficulty? preferredDifficulty,
+  }) =>
+      LocalProfile(
+        name: name ?? this.name,
+        avatarSeed: avatarSeed ?? this.avatarSeed,
+        avatarData: clearAvatarData ? null : (avatarData ?? this.avatarData),
+        preferredDifficulty: preferredDifficulty ?? this.preferredDifficulty,
+      );
 }
 
 class LocalProfileNotifier extends Notifier<LocalProfile> {
+  static const _kName = 'profile.name';
+  static const _kAvatarSeed = 'profile.avatarSeed';
+  static const _kAvatarData = 'profile.avatarData';
+  static const _kDifficulty = 'profile.difficulty';
+
   @override
   LocalProfile build() {
-    return LocalProfile(name: 'Player', avatarSeed: shortId(6));
+    final prefs = ref.read(sharedPreferencesProvider);
+    final name = prefs.getString(_kName) ?? 'Player';
+    final seed = prefs.getString(_kAvatarSeed) ?? shortId(6);
+    // Persist seed so it stays stable across hot-restarts.
+    if (!prefs.containsKey(_kAvatarSeed)) {
+      prefs.setString(_kAvatarSeed, seed);
+    }
+    final avatarData = prefs.getString(_kAvatarData);
+    final diffName = prefs.getString(_kDifficulty);
+    final difficulty =
+        diffName != null ? Difficulty.fromName(diffName) : Difficulty.easy;
+    return LocalProfile(
+      name: name,
+      avatarSeed: seed,
+      avatarData: avatarData,
+      preferredDifficulty: difficulty,
+    );
   }
 
-  void setName(String name) =>
-      state = LocalProfile(name: name, avatarSeed: state.avatarSeed);
+  void setName(String name) {
+    state = state.copyWith(name: name);
+    ref.read(sharedPreferencesProvider).setString(_kName, name);
+  }
+
+  void setDifficulty(Difficulty d) {
+    state = state.copyWith(preferredDifficulty: d);
+    ref.read(sharedPreferencesProvider).setString(_kDifficulty, d.name);
+  }
+
+  void setAvatarData(String? data) {
+    state = state.copyWith(
+      avatarData: data,
+      clearAvatarData: data == null,
+    );
+    final prefs = ref.read(sharedPreferencesProvider);
+    if (data == null) {
+      prefs.remove(_kAvatarData);
+    } else {
+      prefs.setString(_kAvatarData, data);
+    }
+  }
+
+  Future<void> pickAndCompressAvatar() async {
+    final picker = ImagePicker();
+    final XFile? file =
+        await picker.pickImage(source: ImageSource.gallery);
+    if (file == null) return;
+
+    final bytes = await file.readAsBytes();
+    final decoded = img.decodeImage(bytes);
+    if (decoded == null) return;
+
+    final resized = img.copyResizeCropSquare(decoded, size: 72);
+    final jpegBytes = img.encodeJpg(resized, quality: 70);
+    setAvatarData(base64Encode(jpegBytes));
+  }
 }

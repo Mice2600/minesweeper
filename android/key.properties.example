@@ -1,0 +1,12 @@
+# Template for android/key.properties (the real file is gitignored).
+# Copy this to android/key.properties and fill in your own values, or generate
+# a keystore with:
+#   keytool -genkeypair -v -keystore android/upload-keystore.jks \
+#           -keyalg RSA -keysize 2048 -validity 10000 -alias upload
+#
+# storeFile is resolved relative to android/app, so a keystore placed at
+# android/upload-keystore.jks is referenced as ../upload-keystore.jks
+storePassword=CHANGE_ME
+keyPassword=CHANGE_ME
+keyAlias=upload
+storeFile=../upload-keystore.jks

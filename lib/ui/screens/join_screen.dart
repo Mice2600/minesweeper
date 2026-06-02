@@ -53,6 +53,7 @@ class _JoinScreenState extends ConsumerState<JoinScreen> {
           roomCode: code,
           name: p.name,
           avatarSeed: p.avatarSeed,
+          avatarData: p.avatarData,
         );
       } else if (url != null && url.isNotEmpty) {
         await notifier.joinHost(
@@ -60,6 +61,7 @@ class _JoinScreenState extends ConsumerState<JoinScreen> {
           lanUri: Uri.parse(url),
           name: p.name,
           avatarSeed: p.avatarSeed,
+          avatarData: p.avatarData,
         );
       }
     } catch (_) {}

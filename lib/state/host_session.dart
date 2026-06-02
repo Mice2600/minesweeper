@@ -19,10 +19,12 @@ class HostSession {
     required this.hostAvatarSeed,
     required this.config,
     required this.transport,
+    this.hostAvatarData,
   });
 
   final String hostName;
   final String hostAvatarSeed;
+  final String? hostAvatarData;
   GameConfig config;
   final HostTransport transport;
 
@@ -64,6 +66,7 @@ class HostSession {
       id: hostId,
       name: hostName,
       avatarSeed: hostAvatarSeed,
+      avatarData: hostAvatarData,
       color: _colorFor(0),
       isHost: true,
       isReady: true,
@@ -164,8 +167,8 @@ class HostSession {
   void _applyClientMessage(String transportId, ClientMessage msg) {
     final logicalId = _logicalIdFor(transportId);
     switch (msg) {
-      case CJoin(:final name, :final avatarSeed, :final rejoinToken):
-        _handleJoin(transportId, name, avatarSeed, rejoinToken);
+      case CJoin(:final name, :final avatarSeed, :final rejoinToken, :final avatarData):
+        _handleJoin(transportId, name, avatarSeed, rejoinToken, avatarData);
       case CPing():
         _sendTo(logicalId, const SPong());
       case CReady(:final ready):
@@ -279,6 +282,7 @@ class HostSession {
     String name,
     String avatarSeed,
     String? rejoinToken,
+    String? avatarData,
   ) {
     // 1) Rejoin path: token matches a player we're holding inside the grace
     //    window. Reuse their logical id (and color and stats and board
@@ -292,9 +296,14 @@ class HostSession {
 
       final existing = _players[oldLogicalId];
       if (existing != null) {
-        _players[oldLogicalId] = existing.copyWith(
+        _players[oldLogicalId] = PlayerInfo(
+          id: oldLogicalId,
           name: name,
           avatarSeed: avatarSeed,
+          avatarData: avatarData ?? existing.avatarData,
+          color: existing.color,
+          isHost: existing.isHost,
+          isReady: existing.isReady,
           isOffline: false,
         );
       } else {
@@ -302,7 +311,7 @@ class HostSession {
         // treat it as a fresh join under the supplied token instead of
         // creating an orphaned record.
         _materializeNewPlayer(
-            transportId, name, avatarSeed, token: rejoinToken);
+            transportId, name, avatarSeed, avatarData: avatarData, token: rejoinToken);
         return;
       }
 
@@ -319,13 +328,14 @@ class HostSession {
 
     // 2) Fresh join.
     _materializeNewPlayer(
-        transportId, name, avatarSeed, token: rejoinToken ?? shortId(20));
+        transportId, name, avatarSeed, avatarData: avatarData, token: rejoinToken ?? shortId(20));
   }
 
   void _materializeNewPlayer(
     String transportId,
     String name,
     String avatarSeed, {
+    String? avatarData,
     required String token,
   }) {
     final logicalId = transportId; // brand-new player: ids coincide
@@ -336,6 +346,7 @@ class HostSession {
       id: logicalId,
       name: name,
       avatarSeed: avatarSeed,
+      avatarData: avatarData,
       color: _colorFor(_players.length),
     );
     _broadcastLobby();

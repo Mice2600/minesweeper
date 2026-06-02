@@ -545,6 +545,7 @@ class _PlayersBar extends StatelessWidget {
                   Avatar(
                     seed: p.avatarSeed,
                     label: p.name,
+                    avatarData: p.avatarData,
                     size: 30,
                     color: Color(p.color),
                   ),

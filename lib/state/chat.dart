@@ -26,28 +26,38 @@ class ChatMessage {
   final bool mine;
 }
 
-/// Chat transcript + the two bits of view state the UI needs: how many lines
-/// have arrived unseen, and whether the panel is currently open.
+/// Chat transcript + the view state the UI needs: unread count, panel open
+/// flag, and the last message from another player (for the toast preview).
 class ChatState {
   const ChatState({
     this.messages = const [],
     this.unread = 0,
     this.open = false,
+    this.lastMessage,
   });
 
   final List<ChatMessage> messages;
   final int unread;
   final bool open;
 
+  /// Last message received from another player. Drives the toast preview.
+  final ChatMessage? lastMessage;
+
+  static const _keep = Object();
+
   ChatState copyWith({
     List<ChatMessage>? messages,
     int? unread,
     bool? open,
+    Object? lastMessage = _keep,
   }) =>
       ChatState(
         messages: messages ?? this.messages,
         unread: unread ?? this.unread,
         open: open ?? this.open,
+        lastMessage: identical(lastMessage, _keep)
+            ? this.lastMessage
+            : lastMessage as ChatMessage?,
       );
 }
 
@@ -73,13 +83,14 @@ class ChatNotifier extends Notifier<ChatState> {
     required int ts,
     required bool mine,
   }) {
-    final next = [...state.messages, ChatMessage(
+    final msg = ChatMessage(
       playerId: playerId,
       name: name,
       text: text,
       ts: ts,
       mine: mine,
-    )];
+    );
+    final next = [...state.messages, msg];
     if (next.length > _maxMessages) {
       next.removeRange(0, next.length - _maxMessages);
     }
@@ -87,6 +98,7 @@ class ChatNotifier extends Notifier<ChatState> {
     state = state.copyWith(
       messages: next,
       unread: bumpUnread ? state.unread + 1 : state.unread,
+      lastMessage: !mine ? msg : ChatState._keep,
     );
   }
 
@@ -98,5 +110,5 @@ class ChatNotifier extends Notifier<ChatState> {
   void toggle() => state.open ? close() : open();
 
   /// Reset on leave / new session.
-  void clear() => state = const ChatState();
+  void clear() => state = const ChatState(lastMessage: null);
 }

@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -7,12 +8,17 @@ import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import '../../app/theme.dart';
+import '../../game/difficulty.dart';
 import '../../net/relay_config.dart';
+import '../../state/iap.dart';
 import '../../state/session.dart';
 import '../../state/store.dart';
+import '../widgets/avatar.dart';
 import '../widgets/coin_pill.dart';
 import '../widgets/how_to_play.dart';
+import '../widgets/menu_banner.dart';
 import '../widgets/pressable.dart';
+import '../widgets/tip_sheet.dart';
 
 class HomeScreen extends ConsumerWidget {
   const HomeScreen({super.key});
@@ -22,152 +28,200 @@ class HomeScreen extends ConsumerWidget {
     final profile = ref.watch(localProfileProvider);
     final cs = Theme.of(context).colorScheme;
 
+    // Thank-you after a successful tip.
+    ref.listen(iapProvider.select((s) => s.tipThanksNonce), (prev, next) {
+      if (prev == null || next <= prev || !context.mounted) return;
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(const SnackBar(
+          content: Text('Thank you so much! 💜'),
+          behavior: SnackBarBehavior.floating,
+          duration: Duration(milliseconds: 1800),
+        ));
+    });
+    // Surface a billing error.
+    ref.listen(iapProvider.select((s) => s.error), (_, err) {
+      if (err == null || !context.mounted) return;
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(
+          content: Text(err),
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: cs.error,
+        ));
+    });
+
     return Scaffold(
       backgroundColor: Colors.transparent,
+      bottomNavigationBar: const MenuBanner(),
       body: SafeArea(
         child: Stack(
           children: [
             LayoutBuilder(
-          builder: (context, constraints) {
-            // Fit the panel to the available space instead of scrolling:
-            // fill the width on phones (capped at 420), and scale the column
-            // down only when the window is too short (a small desktop window,
-            // or a phone with the keyboard up). On a roomy screen the scale
-            // stays 1.0, so it looks identical to a normal layout.
-            final contentWidth =
-                math.min(constraints.maxWidth - 32, 420.0).clamp(0.0, 420.0);
-            return Center(
-              child: Padding(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                child: FittedBox(
-                  fit: BoxFit.scaleDown,
-                  child: SizedBox(
-                    width: contentWidth,
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                    const _Wordmark(),
-                    const SizedBox(height: 10),
-                    Text(
-                      'Co-op Minesweeper — online or on Wi-Fi',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        color: cs.onSurfaceVariant,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ).animate().fadeIn(delay: 250.ms, duration: 400.ms),
-                    const SizedBox(height: 30),
-                    _NameField(
-                      initial: profile.name,
-                      onChanged: (v) => ref
-                          .read(localProfileProvider.notifier)
-                          .setName(v),
-                    ).animate().fadeIn(delay: 350.ms).slideY(begin: 0.15, end: 0),
-                    const SizedBox(height: 20),
+              builder: (context, constraints) {
+                final contentWidth =
+                    math.min(constraints.maxWidth - 32, 420.0).clamp(0.0, 420.0);
+                return Center(
+                  child: Padding(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: SizedBox(
+                        width: contentWidth,
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            const _Wordmark(),
+                            const SizedBox(height: 10),
+                            Text(
+                              'Co-op Minesweeper — online or on Wi-Fi',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                color: cs.onSurfaceVariant,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ).animate().fadeIn(delay: 250.ms, duration: 400.ms),
+                            const SizedBox(height: 24),
 
-                    // Hero CTA — the zero-friction way in.
-                    _HeroButton(
-                      icon: Icons.play_arrow_rounded,
-                      label: 'Quick play',
-                      sub: 'Jump into a solo board',
-                      onTap: () => _startSolo(ref, context),
-                    ).animate().fadeIn(delay: 450.ms).slideY(begin: 0.2, end: 0),
-                    const SizedBox(height: 22),
+                            // Profile card: avatar + name field
+                            _ProfileCard(profile: profile)
+                                .animate()
+                                .fadeIn(delay: 350.ms)
+                                .slideY(begin: 0.15, end: 0),
+                            const SizedBox(height: 20),
 
-                    Row(
-                      children: [
-                        Expanded(child: Divider(color: cs.outlineVariant)),
-                        Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 12),
-                          child: Text(
-                            'PLAY WITH FRIENDS',
-                            style: TextStyle(
-                              color: cs.onSurfaceVariant,
-                              fontSize: 11,
-                              fontWeight: FontWeight.w800,
-                              letterSpacing: 1.2,
+                            // Quick play CTA
+                            _HeroButton(
+                              icon: Icons.play_arrow_rounded,
+                              label: 'Quick play',
+                              sub: 'Jump into a solo board',
+                              onTap: () => _startSolo(ref, context),
+                            ).animate().fadeIn(delay: 450.ms).slideY(begin: 0.2, end: 0),
+                            const SizedBox(height: 10),
+
+                            // Difficulty chips
+                            _DifficultyRow(
+                              selected: profile.preferredDifficulty,
+                              onChanged: (d) => ref
+                                  .read(localProfileProvider.notifier)
+                                  .setDifficulty(d),
+                            ).animate().fadeIn(delay: 480.ms),
+                            const SizedBox(height: 20),
+
+                            Row(
+                              children: [
+                                Expanded(child: Divider(color: cs.outlineVariant)),
+                                Padding(
+                                  padding:
+                                      const EdgeInsets.symmetric(horizontal: 12),
+                                  child: Text(
+                                    'PLAY WITH FRIENDS',
+                                    style: TextStyle(
+                                      color: cs.onSurfaceVariant,
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w800,
+                                      letterSpacing: 1.2,
+                                    ),
+                                  ),
+                                ),
+                                Expanded(child: Divider(color: cs.outlineVariant)),
+                              ],
                             ),
-                          ),
-                        ),
-                        Expanded(child: Divider(color: cs.outlineVariant)),
-                      ],
-                    ),
-                    const SizedBox(height: 16),
+                            const SizedBox(height: 14),
 
-                    Row(
-                      children: [
-                        Expanded(
-                          child: _SquareButton(
-                            icon: relayIsConfigured
-                                ? Icons.public_rounded
-                                : Icons.wifi_tethering_rounded,
-                            label: 'Host',
-                            tone: cs.primary,
-                            onTap: () => context.go(relayIsConfigured
-                                ? '/host?mode=online'
-                                : '/host'),
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: _SquareButton(
-                            icon: Icons.login_rounded,
-                            label: 'Join',
-                            tone: cs.tertiary,
-                            onTap: () => context.go('/browse'),
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: _SquareButton(
-                            icon: Icons.storefront_rounded,
-                            label: 'Store',
-                            tone: cs.secondary,
-                            onTap: () => context.push('/store'),
-                          ),
-                        ),
-                      ],
-                    ).animate().fadeIn(delay: 550.ms).slideY(begin: 0.2, end: 0),
-                    const SizedBox(height: 14),
+                            // Host + Join (2 larger buttons)
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: _SquareButton(
+                                    icon: relayIsConfigured
+                                        ? Icons.public_rounded
+                                        : Icons.wifi_tethering_rounded,
+                                    label: 'Host',
+                                    tone: cs.primary,
+                                    onTap: () => context.go(relayIsConfigured
+                                        ? '/host?mode=online'
+                                        : '/host'),
+                                  ),
+                                ),
+                                const SizedBox(width: 14),
+                                Expanded(
+                                  child: _SquareButton(
+                                    icon: Icons.login_rounded,
+                                    label: 'Join',
+                                    tone: cs.tertiary,
+                                    onTap: () => context.go('/browse'),
+                                  ),
+                                ),
+                              ],
+                            ).animate().fadeIn(delay: 550.ms).slideY(begin: 0.2, end: 0),
+                            const SizedBox(height: 10),
 
-                    if (relayIsConfigured)
-                      TextButton.icon(
-                        onPressed: () => context.go('/host'),
-                        icon: const Icon(Icons.wifi_tethering_rounded, size: 18),
-                        label: const Text('Host on local Wi-Fi instead'),
-                      )
-                    else
-                      Text(
-                        'Online play needs a relay URL — build with\n'
-                        '--dart-define=RELAY_URL=wss://your-relay.workers.dev',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                            color: cs.onSurfaceVariant, fontSize: 11),
+                            // Store — full-width pill below Host/Join
+                            _StorePill(onTap: () => context.push('/store'))
+                                .animate()
+                                .fadeIn(delay: 580.ms),
+                            const SizedBox(height: 10),
+
+                            if (relayIsConfigured)
+                              TextButton.icon(
+                                onPressed: () => context.go('/host'),
+                                icon: const Icon(Icons.wifi_tethering_rounded,
+                                    size: 18),
+                                label: const Text('Host on local Wi-Fi instead'),
+                              )
+                            else
+                              Text(
+                                'Online play needs a relay URL — build with\n'
+                                '--dart-define=RELAY_URL=wss://your-relay.workers.dev',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                    color: cs.onSurfaceVariant, fontSize: 11),
+                              ),
+
+                            const SizedBox(height: 4),
+                            TextButton.icon(
+                              onPressed: () => showHowToPlay(context),
+                              icon: const Icon(Icons.help_outline_rounded, size: 18),
+                              label: const Text('How to play'),
+                            ),
+                            TextButton.icon(
+                              onPressed: () => context.push('/about'),
+                              icon: const Icon(Icons.info_outline_rounded, size: 18),
+                              label: const Text('About'),
+                            ),
+                            // Low-key tip link — only when billing is available
+                            // (Android with products loaded).
+                            if (ref.watch(iapProvider).available)
+                              TextButton(
+                                onPressed: () => showTipSheet(context),
+                                style: TextButton.styleFrom(
+                                  foregroundColor: cs.onSurfaceVariant
+                                      .withValues(alpha: 0.7),
+                                  minimumSize: const Size(0, 32),
+                                  textStyle: const TextStyle(fontSize: 12),
+                                ),
+                                child: const Text('♥ Support'),
+                              ),
+                          ],
+                        ),
                       ),
-
-                    const SizedBox(height: 6),
-                    TextButton.icon(
-                      onPressed: () => showHowToPlay(context),
-                      icon: const Icon(Icons.help_outline_rounded, size: 18),
-                      label: const Text('How to play'),
-                    ),
-                      ],
                     ),
                   ),
-                ),
-              ),
-            );
-          },
-        ),
+                );
+              },
+            ),
             Positioned(
               top: 8,
               right: 12,
               child: PressableScale(
                 onTap: () => context.push('/store'),
                 child: GestureDetector(
-                  onLongPress: () => _confirmReset(context, ref),
+                  // Debug-only: wipe coins & skins. Disabled in release builds.
+                  onLongPress:
+                      kDebugMode ? () => _confirmReset(context, ref) : null,
                   child: CoinPill(coins: ref.watch(storeProvider).coins),
                 ),
               ).animate().fadeIn(delay: 200.ms, duration: 400.ms),
@@ -215,6 +269,8 @@ class HomeScreen extends ConsumerWidget {
     await ref.read(sessionProvider.notifier).startHost(
           name: profile.name,
           avatarSeed: profile.avatarSeed,
+          avatarData: profile.avatarData,
+          difficulty: profile.preferredDifficulty,
         );
     if (!context.mounted) return;
     ref.read(sessionProvider.notifier).hostStartGame();
@@ -222,8 +278,191 @@ class HomeScreen extends ConsumerWidget {
   }
 }
 
-/// The brand wordmark: a tactile grass badge with a planted flag, and the
-/// title set in Fredoka with an accent on "sweeper".
+// ──────────────────────────────────────── Profile card ────────────────────────
+
+class _ProfileCard extends ConsumerStatefulWidget {
+  const _ProfileCard({required this.profile});
+  final LocalProfile profile;
+
+  @override
+  ConsumerState<_ProfileCard> createState() => _ProfileCardState();
+}
+
+class _ProfileCardState extends ConsumerState<_ProfileCard> {
+  late final TextEditingController _nameCtrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _nameCtrl = TextEditingController(text: widget.profile.name);
+  }
+
+  @override
+  void dispose() {
+    _nameCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final profile = ref.watch(localProfileProvider);
+    final g = Theme.of(context).extension<GamePalette>() ?? GamePalette.light;
+    final cs = Theme.of(context).colorScheme;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: g.panel,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: g.panelBorder, width: 1.5),
+        boxShadow: [
+          BoxShadow(color: g.panelShadow, blurRadius: 10, offset: const Offset(0, 4)),
+        ],
+      ),
+      child: Row(
+        children: [
+          // Avatar with camera badge
+          GestureDetector(
+            onTap: () => ref.read(localProfileProvider.notifier).pickAndCompressAvatar(),
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Avatar(
+                  seed: profile.avatarSeed,
+                  label: profile.name,
+                  avatarData: profile.avatarData,
+                  size: 56,
+                ),
+                Positioned(
+                  right: -4,
+                  bottom: -4,
+                  child: Container(
+                    width: 22,
+                    height: 22,
+                    decoration: BoxDecoration(
+                      color: cs.primary,
+                      shape: BoxShape.circle,
+                      border: Border.all(color: g.panel, width: 2),
+                    ),
+                    alignment: Alignment.center,
+                    child: Icon(Icons.camera_alt_rounded,
+                        size: 12, color: cs.onPrimary),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 14),
+
+          // Name field
+          Expanded(
+            child: TextField(
+              controller: _nameCtrl,
+              decoration: const InputDecoration(
+                labelText: 'Your name',
+                isDense: true,
+                contentPadding:
+                    EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              ),
+              maxLength: 18,
+              onChanged: (v) =>
+                  ref.read(localProfileProvider.notifier).setName(v),
+              textInputAction: TextInputAction.done,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ──────────────────────────────────────── Difficulty row ──────────────────────
+
+class _DifficultyRow extends StatelessWidget {
+  const _DifficultyRow({required this.selected, required this.onChanged});
+  final Difficulty selected;
+  final void Function(Difficulty) onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: Difficulty.values.map((d) {
+        final active = d == selected;
+        return Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 4),
+          child: ChoiceChip(
+            label: Text(d.label),
+            selected: active,
+            onSelected: (_) => onChanged(d),
+            selectedColor: cs.primary.withValues(alpha: 0.18),
+            labelStyle: TextStyle(
+              fontWeight: FontWeight.w700,
+              fontSize: 12,
+              color: active ? cs.primary : cs.onSurfaceVariant,
+            ),
+            side: BorderSide(
+              color: active
+                  ? cs.primary.withValues(alpha: 0.6)
+                  : cs.outlineVariant,
+              width: active ? 1.5 : 1,
+            ),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+            showCheckmark: false,
+          ),
+        );
+      }).toList(),
+    );
+  }
+}
+
+// ──────────────────────────────────────── Store pill ──────────────────────────
+
+class _StorePill extends StatelessWidget {
+  const _StorePill({required this.onTap});
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final g = Theme.of(context).extension<GamePalette>() ?? GamePalette.light;
+    return PressableScale(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+        decoration: BoxDecoration(
+          color: g.panel,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+              color: cs.secondary.withValues(alpha: 0.4), width: 1.5),
+          boxShadow: [
+            BoxShadow(
+                color: g.panelShadow, blurRadius: 8, offset: const Offset(0, 4)),
+          ],
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.storefront_rounded, color: cs.secondary, size: 20),
+            const SizedBox(width: 8),
+            Text(
+              'Store',
+              style: GoogleFonts.fredoka(
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+                color: cs.secondary,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ──────────────────────────────────────── Wordmark ────────────────────────────
+
 class _Wordmark extends StatelessWidget {
   const _Wordmark();
 
@@ -278,6 +517,8 @@ class _Wordmark extends StatelessWidget {
   }
 }
 
+// ──────────────────────────────────────── Hero button ─────────────────────────
+
 class _HeroButton extends StatelessWidget {
   const _HeroButton({
     required this.icon,
@@ -299,7 +540,10 @@ class _HeroButton extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 16),
         decoration: BoxDecoration(
           gradient: LinearGradient(
-            colors: [cs.secondary, Color.lerp(cs.secondary, Colors.black, 0.12)!],
+            colors: [
+              cs.secondary,
+              Color.lerp(cs.secondary, Colors.black, 0.12)!
+            ],
           ),
           borderRadius: BorderRadius.circular(18),
           boxShadow: [
@@ -345,6 +589,8 @@ class _HeroButton extends StatelessWidget {
   }
 }
 
+// ──────────────────────────────────────── Square button ───────────────────────
+
 class _SquareButton extends StatelessWidget {
   const _SquareButton({
     required this.icon,
@@ -370,7 +616,8 @@ class _SquareButton extends StatelessWidget {
           borderRadius: BorderRadius.circular(18),
           border: Border.all(color: tone.withValues(alpha: 0.4), width: 1.5),
           boxShadow: [
-            BoxShadow(color: g.panelShadow, blurRadius: 12, offset: const Offset(0, 6)),
+            BoxShadow(
+                color: g.panelShadow, blurRadius: 12, offset: const Offset(0, 6)),
           ],
         ),
         child: Column(
@@ -397,44 +644,6 @@ class _SquareButton extends StatelessWidget {
           ],
         ),
       ),
-    );
-  }
-}
-
-class _NameField extends StatefulWidget {
-  const _NameField({required this.initial, required this.onChanged});
-  final String initial;
-  final void Function(String) onChanged;
-
-  @override
-  State<_NameField> createState() => _NameFieldState();
-}
-
-class _NameFieldState extends State<_NameField> {
-  late final TextEditingController _c;
-  @override
-  void initState() {
-    super.initState();
-    _c = TextEditingController(text: widget.initial);
-  }
-
-  @override
-  void dispose() {
-    _c.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return TextField(
-      controller: _c,
-      decoration: const InputDecoration(
-        labelText: 'Your name',
-        prefixIcon: Icon(Icons.person_outline),
-      ),
-      maxLength: 18,
-      onChanged: widget.onChanged,
-      textInputAction: TextInputAction.done,
     );
   }
 }

@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'ads/ads.dart';
+import 'analytics/analytics.dart';
 import 'app/router.dart';
 import 'app/theme.dart';
 import 'core/prefs.dart';
@@ -10,6 +12,10 @@ import 'ui/widgets/ambient_background.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final prefs = await SharedPreferences.getInstance();
+  // Starts Firebase Analytics if configured; a no-op otherwise. Never throws.
+  await Analytics.instance.init();
+  // Initializes AdMob (consent + SDK) on Android; a no-op elsewhere. Never throws.
+  await Ads.instance.init();
   runApp(ProviderScope(
     overrides: [sharedPreferencesProvider.overrideWithValue(prefs)],
     child: const MinesweeperApp(),

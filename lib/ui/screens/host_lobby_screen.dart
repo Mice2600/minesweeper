@@ -54,6 +54,7 @@ class _HostLobbyScreenState extends ConsumerState<HostLobbyScreen> {
     await ref.read(sessionProvider.notifier).startHost(
           name: p.name,
           avatarSeed: p.avatarSeed,
+          avatarData: p.avatarData,
           mode: widget.mode,
         );
   }
@@ -675,6 +676,7 @@ class _FilledSlot extends StatelessWidget {
           Avatar(
               seed: player.avatarSeed,
               label: player.name,
+              avatarData: player.avatarData,
               size: 38,
               color: color),
           const SizedBox(width: 10),

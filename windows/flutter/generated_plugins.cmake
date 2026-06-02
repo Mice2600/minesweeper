@@ -5,7 +5,10 @@
 list(APPEND FLUTTER_PLUGIN_LIST
   audioplayers_windows
   dynamic_color
+  file_selector_windows
+  firebase_core
   nsd_windows
+  url_launcher_windows
 )
 
 list(APPEND FLUTTER_FFI_PLUGIN_LIST

@@ -4,10 +4,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
 
+import '../../ads/ads.dart';
+import '../../analytics/analytics.dart';
 import '../../app/theme.dart';
 import '../../game/difficulty.dart';
 import '../../game/engine.dart';
 import '../../net/messages.dart';
+import '../../state/ad_gate.dart';
 import '../../state/session.dart';
 import '../widgets/avatar.dart';
 import '../widgets/particles.dart';
@@ -386,7 +389,7 @@ class _MvpSpotlight extends StatelessWidget {
         Stack(
           clipBehavior: Clip.none,
           children: [
-            Avatar(seed: player.avatarSeed, label: player.name, size: 52, color: color),
+            Avatar(seed: player.avatarSeed, label: player.name, avatarData: player.avatarData, size: 52, color: color),
             Positioned(
               top: -10,
               right: -6,
@@ -754,8 +757,10 @@ class _Cta extends ConsumerWidget {
           SizedBox(
             height: 58,
             child: FilledButton.icon(
-              onPressed: () {
+              onPressed: () async {
+                await _maybeShowInterstitial(ref);
                 ref.read(sessionProvider.notifier).sendRestart();
+                if (!context.mounted) return;
                 context.go('/host');
               },
               style: FilledButton.styleFrom(
@@ -773,6 +778,7 @@ class _Cta extends ConsumerWidget {
         const SizedBox(height: 8),
         TextButton.icon(
           onPressed: () async {
+            await _maybeShowInterstitial(ref);
             await ref.read(sessionProvider.notifier).leave();
             if (!context.mounted) return;
             context.go('/');
@@ -782,6 +788,18 @@ class _Cta extends ConsumerWidget {
         ),
       ],
     );
+  }
+
+  /// Shows an interstitial when the pacing rules allow (every Nth finished
+  /// match, min gap). No-op on non-Android or when no ad is ready.
+  Future<void> _maybeShowInterstitial(WidgetRef ref) async {
+    final gate = ref.read(adGateProvider.notifier);
+    if (!gate.interstitialDue()) return;
+    final shown = await Ads.instance.showInterstitial();
+    if (shown) {
+      gate.recordInterstitial();
+      Analytics.instance.adInterstitialShown();
+    }
   }
 }
 
@@ -906,6 +924,7 @@ class _PlayerDetailCard extends StatelessWidget {
               Avatar(
                 seed: player.avatarSeed,
                 label: player.name,
+                avatarData: player.avatarData,
                 size: 36,
                 color: color,
               ),

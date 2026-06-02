@@ -35,6 +35,7 @@ class PlayerChip extends StatelessWidget {
           Avatar(
             seed: player.avatarSeed,
             label: player.name,
+            avatarData: player.avatarData,
             size: dense ? 28 : 36,
             color: color,
           ),

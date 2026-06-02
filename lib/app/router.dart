@@ -1,6 +1,8 @@
 import 'package:go_router/go_router.dart';
 
+import '../analytics/analytics.dart';
 import '../state/session.dart';
+import '../ui/screens/about_screen.dart';
 import '../ui/screens/browse_screen.dart';
 import '../ui/screens/game_screen.dart';
 import '../ui/screens/home_screen.dart';
@@ -11,6 +13,12 @@ import '../ui/screens/store_screen.dart';
 
 final appRouter = GoRouter(
   initialLocation: '/',
+  // Auto-logs screen_view on navigation when analytics is active; empty list
+  // otherwise. appRouter is built lazily after Analytics.init() runs in main().
+  observers: [
+    if (Analytics.instance.navigatorObserver != null)
+      Analytics.instance.navigatorObserver!,
+  ],
   routes: [
     GoRoute(path: '/', builder: (_, __) => const HomeScreen()),
     GoRoute(path: '/host', builder: (_, state) {
@@ -28,5 +36,6 @@ final appRouter = GoRouter(
     GoRoute(path: '/game', builder: (_, __) => const GameScreen()),
     GoRoute(path: '/result', builder: (_, __) => const ResultScreen()),
     GoRoute(path: '/store', builder: (_, __) => const StoreScreen()),
+    GoRoute(path: '/about', builder: (_, __) => const AboutScreen()),
   ],
 );

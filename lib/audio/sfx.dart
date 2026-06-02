@@ -5,7 +5,7 @@ import 'dart:typed_data';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-enum SfxKind { reveal, flag, chord, mine, win, lose }
+enum SfxKind { reveal, flag, chord, mine, win, lose, chat }
 
 /// Pre-synthesises tiny WAV clips at startup and plays them through one
 /// `AudioPlayer` per kind. No audio assets need to be shipped.
@@ -125,6 +125,16 @@ Uint8List _synthesize(SfxKind kind) {
           final env = exp(-t * 5);
           final f = 600 * exp(-t * 6) + 110;
           return env * sin(2 * pi * f * t) * 0.45;
+        },
+      );
+    case SfxKind.chat:
+      return _renderWav(
+        durationSec: 0.18,
+        wave: (t) {
+          final env = exp(-t * 28);
+          final tone = sin(2 * pi * 1040 * t) * 0.5
+              + sin(2 * pi * 1560 * t) * 0.25;
+          return env * tone * 0.38;
         },
       );
   }

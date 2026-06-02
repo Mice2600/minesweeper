@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../analytics/analytics.dart';
 import '../app/board_skin.dart';
 import '../app/skin_pricing.dart';
 import '../core/prefs.dart';
@@ -53,6 +54,7 @@ class StoreNotifier extends Notifier<StoreState> {
       ownedSkinIds: {...state.ownedSkinIds, skin.id},
     );
     _persist();
+    Analytics.instance.skinPurchased(skinId: skin.id, price: price);
     return true;
   }
 

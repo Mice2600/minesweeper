@@ -28,6 +28,7 @@ class PlayerInfo {
     this.isHost = false,
     this.isReady = false,
     this.isOffline = false,
+    this.avatarData,
   });
 
   final String id;
@@ -41,6 +42,9 @@ class PlayerInfo {
   /// holding their slot inside the rejoin grace window.
   final bool isOffline;
 
+  /// Base64-encoded JPEG avatar photo (72×72, q70). Null = use seed gradient.
+  final String? avatarData;
+
   PlayerInfo copyWith({
     String? name,
     String? avatarSeed,
@@ -53,6 +57,7 @@ class PlayerInfo {
         id: id,
         name: name ?? this.name,
         avatarSeed: avatarSeed ?? this.avatarSeed,
+        avatarData: avatarData,
         color: color ?? this.color,
         isHost: isHost ?? this.isHost,
         isReady: isReady ?? this.isReady,
@@ -67,6 +72,7 @@ class PlayerInfo {
         'isHost': isHost,
         'isReady': isReady,
         'isOffline': isOffline,
+        if (avatarData != null) 'av': avatarData,
       };
 
   factory PlayerInfo.fromJson(Map<String, dynamic> j) => PlayerInfo(
@@ -77,6 +83,7 @@ class PlayerInfo {
         isHost: j['isHost'] as bool? ?? false,
         isReady: j['isReady'] as bool? ?? false,
         isOffline: j['isOffline'] as bool? ?? false,
+        avatarData: j['av'] as String?,
       );
 }
 
@@ -99,6 +106,7 @@ sealed class ClientMessage {
           name: d['name'] as String,
           avatarSeed: d['avatarSeed'] as String,
           rejoinToken: d['rejoinToken'] as String?,
+          avatarData: d['av'] as String?,
         ),
       'ping' => const CPing(),
       'ready' => CReady(ready: d['ready'] as bool),
@@ -128,6 +136,7 @@ class CJoin extends ClientMessage {
     required this.name,
     required this.avatarSeed,
     this.rejoinToken,
+    this.avatarData,
   });
   final String name;
   final String avatarSeed;
@@ -136,6 +145,9 @@ class CJoin extends ClientMessage {
   /// as a reconnect: the player keeps their previous id, color, and stats.
   final String? rejoinToken;
 
+  /// Base64-encoded JPEG avatar photo. Null = use seed gradient.
+  final String? avatarData;
+
   @override
   String get _type => 'join';
   @override
@@ -143,6 +155,7 @@ class CJoin extends ClientMessage {
         'name': name,
         'avatarSeed': avatarSeed,
         if (rejoinToken != null) 'rejoinToken': rejoinToken,
+        if (avatarData != null) 'av': avatarData,
       };
 }
 
