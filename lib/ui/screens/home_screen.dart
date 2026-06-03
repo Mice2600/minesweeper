@@ -165,6 +165,13 @@ class HomeScreen extends ConsumerWidget {
                                 .fadeIn(delay: 580.ms),
                             const SizedBox(height: 10),
 
+                            // Achievements — full-width pill below Store
+                            _AchievementsPill(
+                                    onTap: () => context.push('/achievements'))
+                                .animate()
+                                .fadeIn(delay: 610.ms),
+                            const SizedBox(height: 10),
+
                             if (relayIsConfigured)
                               TextButton.icon(
                                 onPressed: () => context.go('/host'),
@@ -452,6 +459,50 @@ class _StorePill extends StatelessWidget {
                 fontSize: 16,
                 fontWeight: FontWeight.w600,
                 color: cs.secondary,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ──────────────────────────────────────── Achievements pill ───────────────────
+
+class _AchievementsPill extends StatelessWidget {
+  const _AchievementsPill({required this.onTap});
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final g = Theme.of(context).extension<GamePalette>() ?? GamePalette.light;
+    return PressableScale(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+        decoration: BoxDecoration(
+          color: g.panel,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+              color: cs.tertiary.withValues(alpha: 0.4), width: 1.5),
+          boxShadow: [
+            BoxShadow(
+                color: g.panelShadow, blurRadius: 8, offset: const Offset(0, 4)),
+          ],
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.emoji_events_rounded, color: cs.tertiary, size: 20),
+            const SizedBox(width: 8),
+            Text(
+              'Achievements',
+              style: GoogleFonts.fredoka(
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+                color: cs.tertiary,
               ),
             ),
           ],

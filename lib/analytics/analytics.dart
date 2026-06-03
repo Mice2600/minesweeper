@@ -96,6 +96,11 @@ class Analytics {
         'duration_ms': durationMs,
       });
 
+  /// The local player earned an achievement for the first time. [id] is the
+  /// stable achievement key (e.g. `win_hard`).
+  void achievementUnlocked({required String id}) =>
+      _log('achievement_unlocked', {'achievement_id': id});
+
   /// The local player unlocked a cosmetic board skin with in-game coins.
   void skinPurchased({required String skinId, required int price}) =>
       _log('skin_purchased', {'skin_id': skinId, 'price': price});

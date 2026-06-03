@@ -7,6 +7,7 @@ import 'analytics/analytics.dart';
 import 'app/router.dart';
 import 'app/theme.dart';
 import 'core/prefs.dart';
+import 'ui/widgets/achievement_overlay.dart';
 import 'ui/widgets/ambient_background.dart';
 
 Future<void> main() async {
@@ -40,9 +41,16 @@ class MinesweeperApp extends StatelessWidget {
         // the UI was silently cut off.
         scrollBehavior: const _AppScrollBehavior(),
         // Every route's scaffold is transparent (see AppTheme) and floats on a
-        // single shared solid backdrop.
+        // single shared solid backdrop. The AchievementOverlay sits above every
+        // route as one persistent toast host, so an unlock toast triggered on
+        // the game screen survives the auto-navigation to /result.
         builder: (context, child) => AmbientBackground(
-          child: child ?? const SizedBox.shrink(),
+          child: Stack(
+            children: [
+              child ?? const SizedBox.shrink(),
+              const AchievementOverlay(),
+            ],
+          ),
         ),
       ),
     );
