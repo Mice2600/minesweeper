@@ -65,7 +65,7 @@ The layers, top to bottom:
 
 `lib/net/messages.dart` is the single protocol definition, used identically by LAN and relay. `ClientMessage` (guest→host) and `ServerMessage` (host→guest) are sealed classes; each `encode()`s to `{"t": type, "d": payload}` and decodes via a `switch`. Key conventions when changing it:
 
-- **`protocolVersion`** (currently 5) — bump on a breaking change. Read the doc comment for the version history (e.g. v4 packed `SRevealed.cells` into flat `[x,y,v,...]` triplets).
+- **`protocolVersion`** (currently 6) — bump on a breaking change. Read the doc comment for the version history (e.g. v4 packed `SRevealed.cells` into flat `[x,y,v,...]` triplets; v6 added the moderation messages).
 - **Forward compatibility**: an unknown `t` decodes to `CUnknown`/`SUnknown` (ignored), never throws. This lets a newer peer add messages without dropping the connection. Preserve this — decoders must not throw on unknown types.
 - **Backward compatibility**: decoders accept legacy shapes (e.g. `_decodeReveals` reads both packed triplets and old map arrays; `SFlagged` keeps a legacy `flagged` bool alongside `mark`). Keep both when evolving a message.
 - The cell encoding `-2 hidden, -1 mine, 0..8 number` is shared between `GameSnapshot.cells` and `SSnapshot.cells`.
@@ -81,6 +81,42 @@ Both sides survive socket drops:
 - **Liveness**: guests `CPing` every ~8s; host replies `SPong` (filtered inside the relay transport, never surfaced to the session). Both sides force-close a half-open socket after a dead-timeout.
 
 When touching join/reconnect, trace the full path: `CJoin` → `HostSession._handleJoin` → token lookup → `_bindTransport` → `SWelcome` (with the *logical* id) → `SLobby` → `_sendMidGameSnapshot`.
+
+### Moderation / user-generated content
+
+The app carries UGC (display names, chat, avatar photos) between strangers, so it
+ships the safety tools Google Play's UGC policy requires. Three independent
+mechanisms, deliberately at different layers:
+
+- **Filtering — host-side, authoritative.** `lib/core/moderation.dart` folds
+  leetspeak, accents, zero-width padding, and repeat-runs before matching against
+  two lists: `_blockedAnywhere` (substring-safe, catches `f.u.c.k`) and
+  `_blockedWords` (whole-token only, so `grass` and `analysis` survive). Applied
+  in `HostSession` to every `CJoin` name and every `CChat` line *before*
+  broadcast, so a patched client can't push raw text to the room.
+- **Blocking — client-side, local.** `lib/state/moderation.dart`. The host owns
+  who's in the room; each player owns what they see. Blocked authors are dropped
+  in `SessionNotifier._handleServerMessage` at receive time (chat, emoji,
+  cursor) rather than hidden at paint time, so nothing leaks into the unread
+  badge or the toast preview. Keyed by logical id (exact, room-scoped) *and*
+  folded display name (fuzzy, persisted) — there are no accounts, so neither
+  alone is enough.
+- **Kick / report — protocol.** `CKick`/`SKicked` and
+  `CReport`/`SReportAck`/`SModerationNotice` (v6). `HostSession._handleKick`
+  removes the player from `_players` itself rather than waiting on the
+  transport's disconnect event, bans their rejoin token for the life of the
+  room, and evicts via `HostTransport.disconnectGuest`. `SKicked` puts the guest
+  into `SessionConnState.kicked`, which cancels the reconnect loop — retrying
+  would be futile since the token is banned.
+
+UI entry points: `showPlayerActions()` in `lib/ui/widgets/player_actions.dart`,
+reachable from the lobby slots, the in-game player bar, join-screen chips, and
+chat bubbles (long-press). `ModerationListener` surfaces incoming reports to the
+host. `/safety` lists blocked players and filed reports.
+
+**When adding any surface that displays another player's name, photo, or text,
+wire `showPlayerActions` into it and honour `blockedPlayersProvider`.** Play
+treats an unreachable report control as no report control.
 
 ### Game modes
 

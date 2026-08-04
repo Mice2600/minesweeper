@@ -9,6 +9,7 @@ import '../widgets/chat_overlay.dart';
 import '../widgets/emoji_bar.dart';
 import '../widgets/emoji_overlay.dart';
 import '../widgets/match_summary.dart';
+import '../widgets/player_actions.dart';
 import '../widgets/player_chip.dart';
 
 class JoinScreen extends ConsumerStatefulWidget {
@@ -134,6 +135,41 @@ class _JoinScreenState extends ConsumerState<JoinScreen> {
         ),
       );
     }
+    // Being removed by the host is terminal and needs its own copy — the
+    // generic error card would imply a network fault and invite a retry that
+    // the host is guaranteed to refuse.
+    if (s.connectionState == SessionConnState.kicked) {
+      final cs = Theme.of(context).colorScheme;
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.person_remove_rounded, color: cs.error, size: 48),
+            const SizedBox(height: 12),
+            Text(
+              'Removed from the game',
+              style: Theme.of(context).textTheme.titleLarge,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '${s.errorMessage ?? 'The host removed you from this game.'}\n\n'
+              'You can still host or join other games.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: cs.onSurfaceVariant, height: 1.4),
+            ),
+            const SizedBox(height: 18),
+            FilledButton(
+              onPressed: () async {
+                await ref.read(sessionProvider.notifier).leave();
+                if (!mounted) return;
+                context.go('/');
+              },
+              child: const Text('Back to menu'),
+            ),
+          ],
+        ),
+      );
+    }
     if (s.errorMessage != null && s.snapshot == null) {
       final cs = Theme.of(context).colorScheme;
       return Center(
@@ -179,11 +215,27 @@ class _JoinScreenState extends ConsumerState<JoinScreen> {
           spacing: 8,
           runSpacing: 8,
           children: players
-              .map((p) => PlayerChip(
-                    player: p,
-                    subtitle: p.id == s.localId ? 'You' : null,
+              .map((p) => GestureDetector(
+                    onTap: () => showPlayerActions(context, player: p),
+                    child: PlayerChip(
+                      player: p,
+                      subtitle: p.id == s.localId ? 'You' : null,
+                    ),
                   ))
               .toList(),
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            Icon(Icons.shield_outlined, size: 14, color: cs.onSurfaceVariant),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text(
+                'Tap a player to block or report them.',
+                style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12),
+              ),
+            ),
+          ],
         ),
         const Spacer(),
         Center(

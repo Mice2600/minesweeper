@@ -17,6 +17,11 @@ void main() {
       const CCursor(nx: 0.5, ny: 0.25),
       const CEmoji(code: '🎉'),
       const CChat(text: 'hello world'),
+      const CKick(playerId: 'p1'),
+      const CKick(playerId: 'p1', reason: 'spamming'),
+      const CReport(playerId: 'p1', reason: 'harassment'),
+      const CReport(
+          playerId: 'p1', reason: 'abusiveChat', details: 'kept swearing'),
       const CRestart(),
       const CLeave(),
     ];
@@ -69,6 +74,16 @@ void main() {
       const SEmoji(playerId: 'h', code: '👍'),
       const SChat(playerId: 'h', name: 'Host', text: 'hi all', ts: 1234567890),
       const SError(code: 'oops', message: 'something happened'),
+      const SKicked(reason: 'The host removed you from this game.'),
+      const SReportAck(targetId: 'p1'),
+      const SModerationNotice(
+        reporterId: 'p2',
+        reporterName: 'Bea',
+        targetId: 'p1',
+        targetName: 'Al',
+        reason: 'harassment',
+        details: 'would not stop',
+      ),
       const SHeartsChanged(
         hearts: 2,
         byPlayerId: 'h',
@@ -89,5 +104,31 @@ void main() {
         expect(decoded.encode(), encoded);
       });
     }
+  });
+
+  group('forward compatibility', () {
+    // The whole point of CUnknown/SUnknown: a v5 peer must survive the v6
+    // moderation messages rather than tearing the connection down.
+    test('unknown client type decodes to CUnknown, not a throw', () {
+      final decoded =
+          ClientMessage.decode('{"t":"somethingFromV9","d":{"a":1}}');
+      expect(decoded, isA<CUnknown>());
+    });
+
+    test('unknown server type decodes to SUnknown, not a throw', () {
+      final decoded =
+          ServerMessage.decode('{"t":"somethingFromV9","d":{"a":1}}');
+      expect(decoded, isA<SUnknown>());
+    });
+
+    test('optional moderation fields tolerate absence', () {
+      final kicked = ServerMessage.decode('{"t":"kicked","d":{}}') as SKicked;
+      expect(kicked.reason, '');
+      final notice = ServerMessage.decode(
+          '{"t":"moderationNotice","d":{"targetId":"p1"}}') as SModerationNotice;
+      expect(notice.targetId, 'p1');
+      expect(notice.reason, 'other');
+      expect(notice.details, isNull);
+    });
   });
 }

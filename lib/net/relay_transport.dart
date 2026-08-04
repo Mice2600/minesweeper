@@ -180,6 +180,16 @@ class RelayHostTransport implements HostTransport {
     }
   }
 
+  @override
+  void disconnectGuest(String playerId) {
+    // The relay owns the guest sockets, so eviction is a control frame rather
+    // than a local close — see the `kick` case in relay/src/room.ts. The relay
+    // answers with a `left` control frame, which becomes the usual
+    // GuestDisconnected event.
+    if (!_guests.contains(playerId)) return;
+    _sendFrame({'kind': 'kick', 'to': playerId});
+  }
+
   void _sendFrame(Map<String, Object?> frame) {
     final ch = _channel;
     if (ch == null) return;

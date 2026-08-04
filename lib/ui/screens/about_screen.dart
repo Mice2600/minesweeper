@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -99,6 +100,12 @@ class AboutScreen extends StatelessWidget {
                         Divider(color: cs.outlineVariant),
                         const SizedBox(height: 6),
                         _LinkRow(
+                          icon: Icons.shield_outlined,
+                          label: 'Safety & blocked players',
+                          external: false,
+                          onTap: () => context.push('/safety'),
+                        ),
+                        _LinkRow(
                           icon: Icons.privacy_tip_outlined,
                           label: 'Privacy Policy',
                           onTap: () => _open(context, kPrivacyPolicyUrl),
@@ -171,10 +178,15 @@ class _LinkRow extends StatelessWidget {
     required this.icon,
     required this.label,
     required this.onTap,
+    this.external = true,
   });
   final IconData icon;
   final String label;
   final VoidCallback onTap;
+
+  /// Leaves the app (shows the open-in-new affordance). In-app destinations
+  /// get a chevron instead.
+  final bool external;
 
   @override
   Widget build(BuildContext context) {
@@ -197,8 +209,12 @@ class _LinkRow extends StatelessWidget {
                 ),
               ),
             ),
-            Icon(Icons.open_in_new_rounded,
-                size: 16, color: cs.onSurfaceVariant),
+            Icon(
+                external
+                    ? Icons.open_in_new_rounded
+                    : Icons.chevron_right_rounded,
+                size: external ? 16 : 20,
+                color: cs.onSurfaceVariant),
           ],
         ),
       ),

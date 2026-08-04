@@ -192,7 +192,10 @@ export class Room implements DurableObject {
           try {
             g.ws.close(1000, "kicked");
           } catch {}
-          this.guests.delete(frame.to);
+          // Deliberately *not* deleting from `this.guests` here: onGuestClose
+          // is what removes the entry and reports `left` back to the host.
+          // Pre-deleting makes its `guests.delete(id)` guard fail, so the host
+          // never learns the kicked guest is gone.
         }
         break;
       }

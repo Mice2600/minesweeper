@@ -8,6 +8,7 @@ import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import '../../app/theme.dart';
+import '../../core/moderation.dart';
 import '../../game/difficulty.dart';
 import '../../net/relay_config.dart';
 import '../../state/iap.dart';
@@ -361,19 +362,26 @@ class _ProfileCardState extends ConsumerState<_ProfileCard> {
           ),
           const SizedBox(width: 14),
 
-          // Name field
+          // Name field. Names are user-generated content shown to everyone in
+          // the room, so the host filters them on arrival — warn here rather
+          // than let the player find out when their name shows up starred out.
           Expanded(
             child: TextField(
               controller: _nameCtrl,
-              decoration: const InputDecoration(
+              decoration: InputDecoration(
                 labelText: 'Your name',
                 isDense: true,
-                contentPadding:
-                    EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 12, vertical: 10),
+                errorText: Moderation.containsProfanity(_nameCtrl.text)
+                    ? 'Please pick a different name'
+                    : null,
               ),
-              maxLength: 18,
-              onChanged: (v) =>
-                  ref.read(localProfileProvider.notifier).setName(v),
+              maxLength: Moderation.maxNameLength,
+              onChanged: (v) {
+                ref.read(localProfileProvider.notifier).setName(v);
+                setState(() {}); // refresh the inline name warning
+              },
               textInputAction: TextInputAction.done,
             ),
           ),

@@ -7,6 +7,7 @@ import '../../net/messages.dart';
 import '../../state/chat.dart';
 import '../../state/session.dart';
 import 'avatar.dart';
+import 'player_actions.dart';
 import 'pressable.dart';
 
 /// The chat surface itself: a scrolling transcript plus a composer. Hosted
@@ -94,6 +95,23 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
           ),
         ),
         Divider(height: 1, color: g.panelBorder),
+        // Keep the safety route visible rather than hidden behind a gesture
+        // nobody knows about.
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+          child: Row(
+            children: [
+              Icon(Icons.shield_outlined, size: 13, color: cs.onSurfaceVariant),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  'Hold a message to block or report the sender.',
+                  style: TextStyle(fontSize: 11.5, color: cs.onSurfaceVariant),
+                ),
+              ),
+            ],
+          ),
+        ),
         // ── Transcript ──
         Expanded(
           child: messages.isEmpty
@@ -230,44 +248,63 @@ class _Bubble extends ConsumerWidget {
       );
     }
 
+    // Long-pressing someone else's message is the fastest route to the safety
+    // menu — it's where a player is when they decide they've had enough.
+    void openActions() {
+      if (live == null) return;
+      showPlayerActions(context, player: live);
+    }
+
     return Padding(
       padding: const EdgeInsets.only(bottom: 8, right: 24),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Avatar(seed: seed, label: name, avatarData: live?.avatarData, size: 26, color: color),
+          GestureDetector(
+            onTap: openActions,
+            child: Avatar(
+                seed: seed,
+                label: name,
+                avatarData: live?.avatarData,
+                size: 26,
+                color: color),
+          ),
           const SizedBox(width: 8),
           Flexible(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  name,
-                  style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w700,
-                    color: color ?? cs.onSurfaceVariant,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: g.panel,
-                    borderRadius: const BorderRadius.only(
-                      topLeft: Radius.circular(4),
-                      topRight: Radius.circular(14),
-                      bottomLeft: Radius.circular(14),
-                      bottomRight: Radius.circular(14),
+            child: GestureDetector(
+              onLongPress: openActions,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    name,
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      color: color ?? cs.onSurfaceVariant,
                     ),
-                    border: Border.all(color: g.panelBorder),
                   ),
-                  child: SelectableText(
-                    message.text,
-                    style: TextStyle(color: cs.onSurface, height: 1.25),
+                  const SizedBox(height: 2),
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: g.panel,
+                      borderRadius: const BorderRadius.only(
+                        topLeft: Radius.circular(4),
+                        topRight: Radius.circular(14),
+                        bottomLeft: Radius.circular(14),
+                        bottomRight: Radius.circular(14),
+                      ),
+                      border: Border.all(color: g.panelBorder),
+                    ),
+                    child: Text(
+                      message.text,
+                      style: TextStyle(color: cs.onSurface, height: 1.25),
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ],

@@ -49,7 +49,19 @@ flutter build web --release
 
 ---
 
-## 2. Privacy policy — deploy to Cloudflare Pages
+## 2. Privacy policy — ⚠️ REDEPLOY REQUIRED
+
+Already live at <https://minesweeper-coop.lacon.workers.dev/> and already linked
+from the app (`kPrivacyPolicyUrl` in `lib/ui/screens/about_screen.dart`).
+
+**But `privacy/index.html` has changed** — it now covers in-app purchases, the
+moderation/report/block tools, and data retention. The hosted copy is a separate
+deployment that does *not* update from this repo, so **re-upload it before you
+submit**. Play compares the linked policy against the declared data practices;
+a stale policy that omits IAP is a rejection.
+
+<details>
+<summary>First-time hosting instructions (if you ever need to redo it)</summary>
 
 The policy file is at `privacy/index.html`. Host it and get a public URL:
 
@@ -63,6 +75,8 @@ The policy file is at `privacy/index.html`. Host it and get a public URL:
 4. **Update the in-app link**: edit `kPrivacyPolicyUrl` in
    `lib/ui/screens/about_screen.dart` to the real URL, then rebuild.
 5. Use that same URL in the Play Console "Privacy policy" field (step 4).
+
+</details>
 
 ---
 
@@ -106,34 +120,76 @@ You also need graphics you'll have to create:
 > • Pick a difficulty, customize your avatar, and unlock cosmetic board skins.
 > • Up to 8 players per game.
 >
-> No sign-up, no ads (today), just quick co-op puzzling with friends.
+> Play safely: chat and names are filtered automatically, you can block or
+> report any player, and whoever hosts a game can remove them from it.
+>
+> No sign-up required. Contains ads and optional in-app purchases (coin packs
+> and a tip jar) — coins only buy cosmetic board skins and never affect play.
+
+> ⚠️ Do **not** claim "no ads" anywhere in the listing — the app ships AdMob
+> banners, interstitials, and rewarded video. A listing that contradicts the
+> binary is a misrepresentation strike.
+
+**Also required on the listing:**
+- Tick **"Contains ads"**.
+- Declare **in-app purchases** with the price range (~$0.99–$17.99).
+- Category: Game → Puzzle / Board.
 
 ---
 
 ## 5. Data safety form answers (based on actual data flows)
 
-The app has no accounts and no analytics/ad SDKs today. Answer the Play "Data
-safety" section as follows:
+The app has no accounts, but it **does** ship AdMob, Firebase Analytics, and
+Play Billing. Answer the Play "Data safety" section as follows:
 
-- **Does your app collect or share user data?**
-  - *Personal info / Name (display name) and Photos (avatar):* **Collected** (user
-    provides), and **Shared** in the sense it is transmitted to other players in
-    the same game room. It is **not** collected by you/your servers and not used
-    for tracking. Purpose: **App functionality** (multiplayer). Not required —
-    user-chosen.
-  - *Messages (in-game chat):* transmitted to other players in the room for app
-    functionality; not stored by you.
-  - *Device or other IDs / location / contacts / financial:* **Not collected.**
-- **Is data encrypted in transit?** The online relay uses secure WebSockets
-  (`wss://`). Local Wi-Fi (LAN) play uses an unencrypted local-network connection
-  (`ws://`) confined to your network — disclose this honestly if asked.
-- **Can users request data deletion?** All data is on-device; uninstalling removes
-  it. No server-side account to delete.
+- **Does your app collect or share user data?** → **Yes.**
+  - *Personal info / Name (display name)* — **Collected** and **Shared** (it is
+    transmitted to the other players in the room). Purpose: **App
+    functionality**. Optional, user-chosen. Not used for tracking.
+  - *Photos / Videos (avatar photo)* — **Collected** and **Shared** with the
+    other players in the room. Purpose: **App functionality**. Optional.
+  - *Messages (in-game chat)* — **Collected** and **Shared** with the other
+    players in the room. Purpose: **App functionality**. Not stored by you.
+  - *Device or other IDs (advertising ID)* — **Collected** and **Shared** with
+    Google AdMob. Purposes: **Advertising or marketing** and **Analytics**.
+    This is *required*, not optional. ← this is the entry the pre-monetization
+    version of this guide got wrong.
+  - *App activity (app interactions)* — **Collected** via Google Analytics for
+    Firebase. Purpose: **Analytics**.
+  - *Purchase history* — handled entirely by Google Play Billing. Declare it if
+    the form asks; the app itself never sees or stores payment data.
+  - *Location / contacts / financial info / files* — **Not collected.**
+- **Is data encrypted in transit?** **Yes** for online play (the relay uses
+  `wss://`) and for ads/analytics. Local Wi-Fi (LAN) play uses an unencrypted
+  `ws://` socket confined to your own network — disclose this honestly; the
+  privacy policy already states it.
+- **Can users request data deletion?** All app data is on-device; uninstalling
+  removes it. There is no server-side account to delete. Advertising-ID resets
+  are handled in Android system settings.
 
-> ⚠️ The moment you add ads (e.g. AdMob), this changes: you'll need to declare
-> collection of **Device or other IDs** (advertising ID) and update
-> `privacy/index.html`. The privacy file already contains a forward-looking
-> advertising clause to make that transition easy.
+## 5b. User-generated content — required declarations
+
+The app carries UGC (chat, display names, avatar photos) between strangers over
+online rooms, so Play's UGC policy applies. What ships, and where reviewers can
+see it:
+
+| Requirement | Implementation |
+|---|---|
+| Content filtering | [lib/core/moderation.dart](lib/core/moderation.dart) — leetspeak/accent-folding profanity filter applied by the **host** to every display name and chat line before broadcast |
+| In-app reporting | Tap any player (lobby slot, in-game player bar, chat avatar, or long-press a chat message) → **Report** with a reason picker. Files to the host, keeps a local copy under **About → Safety**, and offers an email escalation to the developer |
+| In-app blocking | Same menu → **Block**. Hides that player's messages, reactions, cursor, and profile photo. Persists across sessions by name; managed under **About → Safety** |
+| Removal by moderator | The host sees **Remove from game** on the same menu. The kicked player is disconnected and their rejoin token is refused for the life of the room |
+
+In the Play Console:
+
+- **Content rating (IARC) questionnaire:** answer **Yes** to "Users can interact
+  or exchange content", **Yes** to "users can share images/photos", and **No**
+  to sharing location. Expect a **Teen / 13+** rating as a result.
+- **Target audience & content:** target **13+** (not children). Do not opt into
+  the Designed for Families programme — the app shows non-family-certified ads.
+- **App content → Ads:** declare ads present.
+- Keep a screenshot of the report/block flow handy; UGC apps are sometimes
+  asked to demonstrate the moderation tools during review.
 
 ---
 
@@ -148,20 +204,27 @@ safety" section as follows:
 ## 7. Pre-submit checklist
 
 - [ ] Keystore + password backed up off-machine.
-- [ ] `privacy/` deployed to Cloudflare Pages; URL recorded.
-- [ ] `kPrivacyPolicyUrl` updated in `about_screen.dart` and app rebuilt.
-- [ ] `flutter analyze` clean, `flutter test` green.
+- [ ] **`privacy/index.html` re-uploaded** — it changed (IAP + moderation +
+      retention sections). URL stays <https://minesweeper-coop.lacon.workers.dev/>.
+- [x] `kPrivacyPolicyUrl` set in `about_screen.dart`.
+- [x] `flutter analyze` clean, `flutter test` green.
+- [x] UGC safety tools shipped (filter / report / block / kick) — see §5b.
 - [ ] AAB built and uploaded to a **Closed testing** track.
-- [ ] Listing copy, feature graphic, ≥2 screenshots uploaded.
-- [ ] Data safety + content rating forms completed.
-- [ ] Tested the closed-test build on a real device (online + LAN play work).
-- [ ] (Recommended) Firebase Analytics connected — see [FIREBASE_SETUP.md](FIREBASE_SETUP.md).
-      The code is wired; it's a no-op until you run `flutterfire configure`.
+- [ ] Listing copy (§4 — **no "no ads" claim**), feature graphic 1024×500,
+      ≥2 phone screenshots, 512×512 icon uploaded.
+- [ ] Data safety form completed per §5 — including **advertising ID**.
+- [ ] Content rating + target audience completed per §5b (13+, users interact).
+- [ ] "Contains ads" ticked; in-app products declared.
+- [ ] Tested the closed-test build on a real device (online + LAN play, plus
+      report / block / kick end-to-end with two devices).
+- [ ] Relay redeployed (`cd relay && npm run deploy`) so kicked guests report
+      `left` back to the host. Optional — the host removes them locally either
+      way — but it keeps the relay's view of the room accurate.
 
 ---
 
 ## Deferred (next phases, not blocking release)
-- Ads / monetization (the `addCoins()` hook in `lib/state/store.dart` is ready for
-  a rewarded-ad source).
 - iOS support (no `ios/` target yet).
 - Integration tests for the transport/session layers.
+- Scoping `usesCleartextTraffic` to private IP ranges with a network security
+  config (currently app-wide, needed for LAN `ws://`).

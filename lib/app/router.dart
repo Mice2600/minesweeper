@@ -10,6 +10,7 @@ import '../ui/screens/home_screen.dart';
 import '../ui/screens/host_lobby_screen.dart';
 import '../ui/screens/join_screen.dart';
 import '../ui/screens/result_screen.dart';
+import '../ui/screens/safety_screen.dart';
 import '../ui/screens/store_screen.dart';
 
 final appRouter = GoRouter(
@@ -41,5 +42,6 @@ final appRouter = GoRouter(
         path: '/achievements',
         builder: (_, __) => const AchievementsScreen()),
     GoRoute(path: '/about', builder: (_, __) => const AboutScreen()),
+    GoRoute(path: '/safety', builder: (_, __) => const SafetyScreen()),
   ],
 );

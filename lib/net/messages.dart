@@ -15,7 +15,12 @@ import '../game/engine.dart';
 /// switches tolerant of unknown message types ([CUnknown]/[SUnknown]) so a
 /// future protocol addition no longer tears down a connection to a peer that
 /// hasn't been updated yet.
-const protocolVersion = 5;
+///
+/// v6: safety tools for user-generated content — `CKick`/`SKicked` (host
+/// removes a player), `CReport`/`SReportAck`/`SModerationNotice` (any player
+/// reports another to the host). Additive only: a v5 peer decodes all five as
+/// [CUnknown]/[SUnknown] and keeps playing, it just can't moderate.
+const protocolVersion = 6;
 
 // ───────────────────────────────────────── Player ─────────────────────────────
 
@@ -122,6 +127,15 @@ sealed class ClientMessage {
       'cursorLeave' => const CCursorLeave(),
       'emoji' => CEmoji(code: d['code'] as String),
       'chat' => CChat(text: d['text'] as String),
+      'kick' => CKick(
+          playerId: d['playerId'] as String,
+          reason: d['reason'] as String?,
+        ),
+      'report' => CReport(
+          playerId: d['playerId'] as String,
+          reason: d['reason'] as String,
+          details: d['details'] as String?,
+        ),
       'restart' => const CRestart(),
       'leave' => const CLeave(),
       // Unknown types are kept (not thrown) so a newer peer's additions don't
@@ -255,6 +269,60 @@ class CChat extends ClientMessage {
   Map<String, dynamic> _payload() => {'text': text};
 }
 
+/// Host-only intent: remove [playerId] from the room. The host validates the
+/// sender (a guest sending this gets an `notHost` [SError]), tells the target
+/// with [SKicked], drops their socket, and refuses their rejoin token for the
+/// life of the room.
+class CKick extends ClientMessage {
+  const CKick({required this.playerId, this.reason});
+
+  /// Logical id of the player to remove.
+  final String playerId;
+
+  /// Short free-text shown to the removed player. Null → a generic message.
+  final String? reason;
+
+  @override
+  String get _type => 'kick';
+  @override
+  Map<String, dynamic> _payload() => {
+        'playerId': playerId,
+        if (reason != null) 'reason': reason,
+      };
+}
+
+/// Any player → host: flag [playerId] for abusive content. The host is the
+/// room's moderator, so this is what gives it something to act on; the
+/// reporter also keeps a local copy (see `ReportLog`) that they can forward to
+/// the developer. The host replies with [SReportAck] and raises a local
+/// [SModerationNotice] on its own UI.
+class CReport extends ClientMessage {
+  const CReport({
+    required this.playerId,
+    required this.reason,
+    this.details,
+  });
+
+  /// Logical id of the reported player.
+  final String playerId;
+
+  /// One of the fixed reason slugs (`abusiveChat`, `harassment`,
+  /// `inappropriateAvatar`, `inappropriateName`, `spam`, `other`).
+  final String reason;
+
+  /// Optional free text from the reporter.
+  final String? details;
+
+  @override
+  String get _type => 'report';
+  @override
+  Map<String, dynamic> _payload() => {
+        'playerId': playerId,
+        'reason': reason,
+        if (details != null) 'details': details,
+      };
+}
+
 /// A client message whose `t` this build doesn't recognize. Produced by
 /// [ClientMessage.decode] instead of throwing, so forward-compat additions from
 /// a newer peer are ignored rather than dropping the connection. Never sent.
@@ -359,6 +427,16 @@ sealed class ServerMessage {
           name: d['name'] as String,
           text: d['text'] as String,
           ts: d['ts'] as int,
+        ),
+      'kicked' => SKicked(reason: d['reason'] as String? ?? ''),
+      'reportAck' => SReportAck(targetId: d['targetId'] as String? ?? ''),
+      'moderationNotice' => SModerationNotice(
+          reporterId: d['reporterId'] as String? ?? '',
+          reporterName: d['reporterName'] as String? ?? '',
+          targetId: d['targetId'] as String? ?? '',
+          targetName: d['targetName'] as String? ?? '',
+          reason: d['reason'] as String? ?? 'other',
+          details: d['details'] as String?,
         ),
       'error' =>
         SError(code: d['code'] as String, message: d['message'] as String),
@@ -667,6 +745,72 @@ class SChat extends ServerMessage {
   @override
   Map<String, dynamic> _payload() =>
       {'playerId': playerId, 'name': name, 'text': text, 'ts': ts};
+}
+
+/// Sent to a player the host is removing, immediately before their socket is
+/// dropped. Distinct from [SError] because the guest must *not* treat it as a
+/// transient failure: the session cancels its reconnect loop on receipt, since
+/// the host will also refuse the rejoin token.
+class SKicked extends ServerMessage {
+  const SKicked({required this.reason});
+
+  /// Host-supplied explanation. May be empty.
+  final String reason;
+
+  @override
+  String get _type => 'kicked';
+  @override
+  Map<String, dynamic> _payload() => {'reason': reason};
+}
+
+/// Host's acknowledgement of a [CReport], so the reporter's UI can confirm the
+/// report actually reached the room owner rather than optimistically claiming
+/// it did.
+class SReportAck extends ServerMessage {
+  const SReportAck({required this.targetId});
+
+  /// Logical id of the player that was reported.
+  final String targetId;
+
+  @override
+  String get _type => 'reportAck';
+  @override
+  Map<String, dynamic> _payload() => {'targetId': targetId};
+}
+
+/// Raised on the **host's own** event stream when a [CReport] arrives, so the
+/// host UI can surface "X reported Y" and offer to kick. Never broadcast — the
+/// rest of the room has no business seeing who reported whom.
+class SModerationNotice extends ServerMessage {
+  const SModerationNotice({
+    required this.reporterId,
+    required this.reporterName,
+    required this.targetId,
+    required this.targetName,
+    required this.reason,
+    this.details,
+  });
+
+  final String reporterId;
+  final String reporterName;
+  final String targetId;
+  final String targetName;
+
+  /// Reason slug — see [CReport.reason].
+  final String reason;
+  final String? details;
+
+  @override
+  String get _type => 'moderationNotice';
+  @override
+  Map<String, dynamic> _payload() => {
+        'reporterId': reporterId,
+        'reporterName': reporterName,
+        'targetId': targetId,
+        'targetName': targetName,
+        'reason': reason,
+        if (details != null) 'details': details,
+      };
 }
 
 /// A server message whose `t` this build doesn't recognize. Produced by

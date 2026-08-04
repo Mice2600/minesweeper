@@ -83,6 +83,17 @@ class LanHostTransport implements HostTransport {
     }
   }
 
+  @override
+  void disconnectGuest(String playerId) {
+    final c = _connFor(playerId);
+    if (c == null) return;
+    // Drop the socket. `_onClose` runs from the stream's onDone and emits the
+    // usual GuestDisconnected, so HostSession's departure path is unchanged.
+    try {
+      c.channel.sink.close(1000, 'kicked');
+    } catch (_) {}
+  }
+
   // ─── Internals ─────────────────────────────────────────────────────────────
 
   void _onConnection(WebSocketChannel channel) {

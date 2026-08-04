@@ -16,14 +16,20 @@ class ConnectionOverlay extends StatelessWidget {
     super.key,
     required this.state,
     required this.onLeave,
+    this.message,
   });
 
   final SessionConnState state;
   final VoidCallback onLeave;
 
+  /// Explanation to show instead of the generic copy. Carries the host's
+  /// reason when [state] is [SessionConnState.kicked].
+  final String? message;
+
   bool get _visible =>
       state == SessionConnState.reconnecting ||
-      state == SessionConnState.disconnected;
+      state == SessionConnState.disconnected ||
+      state == SessionConnState.kicked;
 
   @override
   Widget build(BuildContext context) {
@@ -34,7 +40,8 @@ class ConnectionOverlay extends StatelessWidget {
         curve: Curves.easeOut,
         opacity: _visible ? 1 : 0,
         child: _visible
-            ? _OverlayContent(state: state, onLeave: onLeave)
+            ? _OverlayContent(
+                state: state, onLeave: onLeave, message: message)
             : const SizedBox.shrink(),
       ),
     );
@@ -42,14 +49,21 @@ class ConnectionOverlay extends StatelessWidget {
 }
 
 class _OverlayContent extends StatelessWidget {
-  const _OverlayContent({required this.state, required this.onLeave});
+  const _OverlayContent({
+    required this.state,
+    required this.onLeave,
+    this.message,
+  });
   final SessionConnState state;
   final VoidCallback onLeave;
+  final String? message;
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final isLost = state == SessionConnState.disconnected;
+    // Both are terminal — no reconnect spinner, one way out.
+    final isLost = state == SessionConnState.disconnected ||
+        state == SessionConnState.kicked;
 
     return Stack(
       fit: StackFit.expand,
@@ -70,6 +84,7 @@ class _OverlayContent extends StatelessWidget {
                 onLeave: onLeave,
                 isLost: isLost,
                 cs: cs,
+                message: message,
               )
                   .animate(key: ValueKey(state))
                   .fadeIn(duration: 240.ms, curve: Curves.easeOut)
@@ -93,11 +108,15 @@ class _Card extends StatelessWidget {
     required this.onLeave,
     required this.isLost,
     required this.cs,
+    this.message,
   });
   final SessionConnState state;
   final VoidCallback onLeave;
   final bool isLost;
   final ColorScheme cs;
+  final String? message;
+
+  bool get _kicked => state == SessionConnState.kicked;
 
   @override
   Widget build(BuildContext context) {
@@ -126,10 +145,12 @@ class _Card extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          _RadarIcon(isLost: isLost, cs: cs),
+          _RadarIcon(isLost: isLost, kicked: _kicked, cs: cs),
           const SizedBox(height: 22),
           Text(
-            isLost ? 'Disconnected' : 'Host went away',
+            _kicked
+                ? 'Removed from the game'
+                : (isLost ? 'Disconnected' : 'Host went away'),
             style: Theme.of(context).textTheme.titleLarge?.copyWith(
                   fontWeight: FontWeight.w700,
                   color: isLost ? cs.error : cs.onSurface,
@@ -139,9 +160,12 @@ class _Card extends StatelessWidget {
           ),
           const SizedBox(height: 10),
           Text(
-            isLost
-                ? "Couldn't get back to the host.\nThe room may be closed."
-                : "We're holding your spot — the room is still alive.\nReconnecting…",
+            _kicked
+                ? '${message ?? 'The host removed you from this game.'}\n\n'
+                    'You can still host or join other games.'
+                : (isLost
+                    ? "Couldn't get back to the host.\nThe room may be closed."
+                    : "We're holding your spot — the room is still alive.\nReconnecting…"),
             textAlign: TextAlign.center,
             style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                   color: cs.onSurfaceVariant,
@@ -152,7 +176,7 @@ class _Card extends StatelessWidget {
           if (isLost)
             _PrimaryButton(
               icon: Icons.logout_rounded,
-              label: 'Leave game',
+              label: _kicked ? 'Back to menu' : 'Leave game',
               cs: cs,
               tone: cs.error,
               onPressed: onLeave,
@@ -181,8 +205,13 @@ class _Card extends StatelessWidget {
 /// Concentric rings + center dot that pulse outward. Looks like a radar/sonar
 /// sweep — fits the "we're listening for the host" idea.
 class _RadarIcon extends StatelessWidget {
-  const _RadarIcon({required this.isLost, required this.cs});
+  const _RadarIcon({
+    required this.isLost,
+    required this.cs,
+    this.kicked = false,
+  });
   final bool isLost;
+  final bool kicked;
   final ColorScheme cs;
 
   @override
@@ -209,7 +238,11 @@ class _RadarIcon extends StatelessWidget {
               border: Border.all(color: accent, width: 2),
             ),
             child: Icon(
-              isLost ? Icons.cloud_off_rounded : Icons.satellite_alt_rounded,
+              kicked
+                  ? Icons.person_remove_rounded
+                  : (isLost
+                      ? Icons.cloud_off_rounded
+                      : Icons.satellite_alt_rounded),
               color: accent,
               size: 28,
             ),

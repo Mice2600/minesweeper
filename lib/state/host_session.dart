@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import '../core/ids.dart';
+import '../core/moderation.dart';
 import '../game/board.dart';
 import '../game/difficulty.dart';
 import '../game/engine.dart';
@@ -58,13 +59,27 @@ class HostSession {
   final Map<String, Timer> _graceTimers = {}; // logicalId → eviction timer
   static const _graceWindow = Duration(seconds: 30);
 
+  // ─── Moderation ─────────────────────────────────────────────────────────
+  // Rejoin tokens of players the host has kicked. A kicked guest reconnecting
+  // gets a brand-new transport id, so the token is the only stable handle we
+  // have on them — there are no accounts. It holds for the life of the room,
+  // which is the right scope: the room *is* the host's moderation domain.
+  final Set<String> _bannedTokens = {};
+
+  /// Reports received this room, newest last. Kept so the host UI can show a
+  /// moderation log and so repeat offenders are visible at a glance.
+  final List<SModerationNotice> _reports = [];
+  List<SModerationNotice> get reports => List.unmodifiable(_reports);
+
   Future<HostJoinInfo> start() async {
     _sub = transport.events.listen(_handleTransportEvent);
     final info = await transport.start();
     _joinInfo = info;
     _players[hostId] = PlayerInfo(
       id: hostId,
-      name: hostName,
+      // The host is subject to the same name filter as everyone else — they
+      // are the moderator, not exempt from moderation.
+      name: Moderation.sanitizeName(hostName),
       avatarSeed: hostAvatarSeed,
       avatarData: hostAvatarData,
       color: _colorFor(0),
@@ -254,15 +269,21 @@ class HostSession {
       case CEmoji(:final code):
         _broadcast(SEmoji(playerId: logicalId, code: code));
       case CChat(:final text):
-        final clean = _sanitizeChat(text);
+        // Authoritative filtering: the host masks before re-broadcast, so a
+        // patched client can't push raw text to the rest of the room.
+        final clean = Moderation.sanitizeChat(text);
         if (clean.isEmpty) return;
         final author = _players[logicalId];
         _broadcast(SChat(
           playerId: logicalId,
-          name: author?.name ?? 'Player',
+          name: author?.name ?? Moderation.fallbackName,
           text: clean,
           ts: DateTime.now().millisecondsSinceEpoch,
         ));
+      case CKick(:final playerId, :final reason):
+        _handleKick(logicalId, playerId, reason);
+      case CReport(:final playerId, :final reason, :final details):
+        _handleReport(logicalId, playerId, reason, details);
       case CRestart():
         if (logicalId != hostId) return;
         _engine = null;
@@ -279,11 +300,22 @@ class HostSession {
 
   void _handleJoin(
     String transportId,
-    String name,
+    String rawName,
     String avatarSeed,
     String? rejoinToken,
     String? avatarData,
   ) {
+    // A kicked player keeps their rejoin token across reconnects, so this is
+    // what makes the removal stick for the life of the room.
+    if (rejoinToken != null && _bannedTokens.contains(rejoinToken)) {
+      _evict(transportId, 'The host removed you from this game.');
+      return;
+    }
+
+    // Names are user-generated content shown to everyone in the room, so they
+    // go through the same filter as chat — on the host, which is authoritative.
+    final name = Moderation.sanitizeName(rawName);
+
     // 1) Rejoin path: token matches a player we're holding inside the grace
     //    window. Reuse their logical id (and color and stats and board
     //    ownership). Cancel the eviction timer.
@@ -489,14 +521,88 @@ class HostSession {
 
   int _colorFor(int idx) => _palette[idx % _palette.length];
 
-  /// Max chat length the host accepts; longer text is truncated.
-  static const _maxChatLen = 280;
+  // ─── Moderation ───────────────────────────────────────────────────────────
 
-  /// Trim surrounding whitespace and cap length. Returns '' for anything that
-  /// would be empty, which the caller drops.
-  String _sanitizeChat(String raw) {
-    var t = raw.trim();
-    if (t.length > _maxChatLen) t = t.substring(0, _maxChatLen);
-    return t;
+  /// Removes [targetId] from the room at the host's request.
+  ///
+  /// Order matters: [SKicked] has to reach the target *before* their socket
+  /// closes, or they'd see a plain drop and start reconnecting. Removal from
+  /// [_players] happens here rather than being left to the transport's
+  /// disconnect event — a kicked player must vanish from the roster
+  /// immediately, not linger `isOffline` for the 30s rejoin grace window.
+  void _handleKick(String byId, String targetId, String? reason) {
+    if (byId != hostId) {
+      _sendTo(byId,
+          const SError(code: 'notHost', message: 'Only the host can remove players'));
+      return;
+    }
+    if (targetId == hostId) return; // the host cannot remove themselves
+    final target = _players[targetId];
+    if (target == null) return;
+
+    final token = _playerToken[targetId];
+    if (token != null) _bannedTokens.add(token);
+
+    final transportId = _logicalToTransport[targetId];
+    if (transportId != null) {
+      _evict(transportId, reason ?? 'The host removed you from this game.');
+      _transportToLogical.remove(transportId);
+      _logicalToTransport.remove(targetId);
+    }
+
+    _graceTimers.remove(targetId)?.cancel();
+    _players.remove(targetId);
+    if (token != null) _tokenToPlayer.remove(token);
+    _playerToken.remove(targetId);
+    _broadcastLobby();
+  }
+
+  /// Tells one transport connection it has been removed, then closes it.
+  ///
+  /// The close is deferred by a beat on purpose. [SKicked] and the socket
+  /// teardown are two separate operations on the same sink, and closing
+  /// immediately after a write risks the frame never leaving — the guest would
+  /// then see a bare disconnect and start a reconnect loop the host is
+  /// guaranteed to refuse. A short delay costs nothing and makes the
+  /// explanation reliably arrive first.
+  void _evict(String transportId, String reason) {
+    transport.sendToGuest(transportId, SKicked(reason: reason));
+    Timer(const Duration(milliseconds: 250), () {
+      transport.disconnectGuest(transportId);
+    });
+  }
+
+  /// Records a player-on-player report and tells both ends about it. The
+  /// report never leaves the room: the host sees it and decides, the reporter
+  /// gets confirmation. Nothing is uploaded anywhere.
+  void _handleReport(
+    String byId,
+    String targetId,
+    String reason,
+    String? details,
+  ) {
+    final target = _players[targetId];
+    if (target == null) return;
+    if (targetId == byId) return; // reporting yourself is a no-op
+    final reporter = _players[byId];
+
+    final notice = SModerationNotice(
+      reporterId: byId,
+      reporterName: reporter?.name ?? Moderation.fallbackName,
+      targetId: targetId,
+      targetName: target.name,
+      reason: reason,
+      details: details == null ? null : Moderation.sanitizeChat(details),
+    );
+    _reports.add(notice);
+
+    // Confirm to the reporter, then raise it on the host's own stream only —
+    // broadcasting would tell the whole room who reported whom. When the host
+    // is the reporter there's nobody to notify and nothing to acknowledge:
+    // they already have the remove button in the same menu.
+    if (byId != hostId) {
+      _sendTo(byId, SReportAck(targetId: targetId));
+      _localCtrl.add(notice);
+    }
   }
 }

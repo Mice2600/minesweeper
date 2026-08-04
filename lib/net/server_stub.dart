@@ -25,4 +25,7 @@ class LanHostTransport implements HostTransport {
 
   @override
   void broadcast(ServerMessage _, {String? excludePlayerId}) {}
+
+  @override
+  void disconnectGuest(String _) {}
 }

@@ -45,6 +45,13 @@ abstract class HostTransport {
   Stream<HostTransportEvent> get events;
   void sendToGuest(String playerId, ServerMessage msg);
   void broadcast(ServerMessage msg, {String? excludePlayerId});
+
+  /// Force-closes one guest's connection. Used by the host's kick flow, which
+  /// sends [SKicked] first and then calls this. Implementations must be a
+  /// no-op for an unknown [playerId]. A normal [GuestDisconnected] event
+  /// follows, so the session's usual departure path still runs.
+  void disconnectGuest(String playerId);
+
   Future<void> stop();
 }
 

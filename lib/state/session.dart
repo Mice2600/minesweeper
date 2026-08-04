@@ -23,6 +23,7 @@ import '../net/transport.dart';
 import 'ad_gate.dart';
 import 'chat.dart';
 import 'host_session.dart';
+import 'moderation.dart';
 
 /// All UI-facing game state derived from server messages.
 class GameSnapshot {
@@ -250,6 +251,11 @@ enum SessionConnState {
   ended,
   reconnecting,
   disconnected,
+
+  /// The host removed this player. Terminal and distinct from [disconnected]:
+  /// there is no reconnect loop, because the host also refuses the rejoin
+  /// token. The UI says so plainly rather than implying a network fault.
+  kicked,
 }
 
 final sessionProvider =
@@ -637,6 +643,19 @@ class SessionNotifier extends Notifier<SessionState> {
   void sendReady(bool ready) => _send(CReady(ready: ready));
   void sendRestart() => _send(const CRestart());
 
+  /// Host-only: remove [playerId] from the room. Guests get a `notHost`
+  /// [SError] if they try, so this is safe to call from shared UI.
+  void sendKick(String playerId, {String? reason}) =>
+      _send(CKick(playerId: playerId, reason: reason));
+
+  /// Flag [playerId] to the host for abusive content.
+  void sendReport(
+    String playerId, {
+    required String reason,
+    String? details,
+  }) =>
+      _send(CReport(playerId: playerId, reason: reason, details: details));
+
   void _send(ClientMessage msg) {
     final h = _host;
     if (h != null) {
@@ -651,6 +670,10 @@ class SessionNotifier extends Notifier<SessionState> {
   Future<void> leave() async {
     _clearReconnectState();
     ref.read(chatProvider.notifier).clear();
+    // Drop the room-scoped moderation state. Persisted *name* blocks survive
+    // on purpose — that's what carries a block into the next room.
+    ref.read(blockedPlayersProvider.notifier).clearSessionBlocks();
+    ref.read(moderationFeedProvider.notifier).clear();
     await _guestSub?.cancel();
     _guestSub = null;
     await _hostLocalSub?.cancel();
@@ -857,6 +880,7 @@ class SessionNotifier extends Notifier<SessionState> {
       case SCursor(:final playerId, :final nx, :final ny):
         if (snap == null) return;
         if (playerId == state.localId) return;
+        if (_isBlocked(playerId)) return;
         final newCursors =
             Map<String, ({double nx, double ny})>.from(snap.cursors);
         newCursors[playerId] = (nx: nx, ny: ny);
@@ -870,8 +894,13 @@ class SessionNotifier extends Notifier<SessionState> {
         newCursors.remove(playerId);
         state = state.copyWith(snapshot: snap.copyWith(cursors: newCursors));
       case SEmoji(:final playerId, :final code):
+        if (_isBlocked(playerId)) return;
         ref.read(emojiBurstProvider.notifier).push(playerId, code);
       case SChat(:final playerId, :final name, :final text, :final ts):
+        // Blocked authors are dropped at the door rather than hidden at paint
+        // time: nothing they send should reach the transcript, the unread
+        // badge, or the toast preview.
+        if (_isBlocked(playerId)) return;
         ref.read(chatProvider.notifier).receive(
               playerId: playerId,
               name: name,
@@ -879,6 +908,23 @@ class SessionNotifier extends Notifier<SessionState> {
               ts: ts,
               mine: playerId == state.localId,
             );
+      case SKicked(:final reason):
+        // Terminal. Kill the reconnect loop first — the host is refusing our
+        // rejoin token, so retrying would just burn battery and confuse the UI
+        // with a "reconnecting" spinner that can never succeed.
+        _clearReconnectState();
+        unawaited(_guest?.close());
+        state = state.copyWith(
+          connectionState: SessionConnState.kicked,
+          errorMessage: reason.isEmpty
+              ? 'The host removed you from this game.'
+              : reason,
+        );
+      case SReportAck(:final targetId):
+        ref.read(moderationFeedProvider.notifier).ackReport(targetId);
+      case SModerationNotice():
+        // Host-only: someone in the room reported someone else.
+        ref.read(moderationFeedProvider.notifier).addNotice(msg);
       case SError(:final message):
         state = state.copyWith(errorMessage: message);
       case SPong():
@@ -957,6 +1003,16 @@ class SessionNotifier extends Notifier<SessionState> {
           ));
         }
     }
+  }
+
+  /// True when this device has blocked [playerId]. Resolves the player's
+  /// current name from the snapshot so a name-based block (which is what
+  /// survives across rooms) applies to whoever is wearing that name now.
+  bool _isBlocked(String playerId) {
+    final blocked = ref.read(blockedPlayersProvider);
+    if (blocked.ids.isEmpty && blocked.names.isEmpty) return false;
+    final name = state.snapshot?.playerById(playerId)?.name ?? '';
+    return blocked.isBlocked(id: playerId, name: name);
   }
 
   GameSnapshot _emptySnapshot(

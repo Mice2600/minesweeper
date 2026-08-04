@@ -9,6 +9,7 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 import '../../app/theme.dart';
 import '../../game/difficulty.dart';
 import '../../net/messages.dart';
+import '../../state/moderation.dart';
 import '../../state/session.dart';
 import '../widgets/avatar.dart';
 import '../widgets/chat_button.dart';
@@ -17,6 +18,8 @@ import '../widgets/difficulty_picker.dart';
 import '../widgets/emoji_bar.dart';
 import '../widgets/emoji_overlay.dart';
 import '../widgets/game_panel.dart';
+import '../widgets/moderation_listener.dart';
+import '../widgets/player_actions.dart';
 import '../widgets/pressable.dart';
 
 class HostLobbyScreen extends ConsumerStatefulWidget {
@@ -70,6 +73,7 @@ class _HostLobbyScreenState extends ConsumerState<HostLobbyScreen> {
     });
 
     final players = s.snapshot?.players ?? const <PlayerInfo>[];
+    final blocked = ref.watch(blockedPlayersProvider);
     final firstUrl = s.hostUrls.isNotEmpty ? s.hostUrls.first : null;
     final preset = BoardPreset.fromConfig(s.config, customSelected: _customSelected);
     final notifier = ref.read(sessionProvider.notifier);
@@ -182,6 +186,7 @@ class _HostLobbyScreenState extends ConsumerState<HostLobbyScreen> {
                     columns: 2,
                     online: widget.mode == HostMode.online,
                     soloHint: players.length <= 1,
+                    blocked: blocked,
                   ),
                 );
 
@@ -279,6 +284,8 @@ class _HostLobbyScreenState extends ConsumerState<HostLobbyScreen> {
                 const Positioned.fill(
                     child: IgnorePointer(child: EmojiOverlay())),
                 const ChatOverlay(),
+                // Surfaces incoming player reports to the host.
+                const ModerationListener(),
               ],
             ),
     );
@@ -618,24 +625,46 @@ class _PlayerSlots extends StatelessWidget {
     required this.columns,
     required this.online,
     required this.soloHint,
+    required this.blocked,
   });
   final List<PlayerInfo> players;
   final String localId;
   final int columns;
   final bool online;
   final bool soloHint;
+  final BlockedPlayers blocked;
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final slots = <Widget>[
-      for (final p in players) _FilledSlot(player: p, isMe: p.id == localId),
+      for (final p in players)
+        _FilledSlot(
+          player: p,
+          isMe: p.id == localId,
+          blocked: blocked.isBlocked(id: p.id, name: p.name),
+        ),
       for (var i = players.length; i < 4; i++) const _EmptySlot(),
     ];
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _tileGrid(slots, columns),
+        if (players.length > 1) ...[
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Icon(Icons.shield_outlined, size: 15, color: cs.onSurfaceVariant),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  'Tap a player to block, report, or remove them.',
+                  style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12.5),
+                ),
+              ),
+            ],
+          ),
+        ],
         if (soloHint) ...[
           const SizedBox(height: 10),
           Row(
@@ -660,59 +689,77 @@ class _PlayerSlots extends StatelessWidget {
 }
 
 class _FilledSlot extends StatelessWidget {
-  const _FilledSlot({required this.player, required this.isMe});
+  const _FilledSlot({
+    required this.player,
+    required this.isMe,
+    required this.blocked,
+  });
   final PlayerInfo player;
   final bool isMe;
+  final bool blocked;
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final color = Color(player.color);
-    return GamePanel(
-      borderColor: color.withValues(alpha: 0.55),
-      padding: const EdgeInsets.all(12),
-      child: Row(
-        children: [
-          Avatar(
-              seed: player.avatarSeed,
-              label: player.name,
-              avatarData: player.avatarData,
-              size: 38,
-              color: color),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Row(
-                  children: [
-                    Flexible(
-                      child: Text(
-                        player.name,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontWeight: FontWeight.w700,
-                          fontSize: 15,
-                          color: cs.onSurface,
+    return PressableScale(
+      onTap: () => showPlayerActions(context, player: player),
+      child: GamePanel(
+        borderColor: color.withValues(alpha: 0.55),
+        padding: const EdgeInsets.all(12),
+        child: Row(
+          children: [
+            Avatar(
+                seed: player.avatarSeed,
+                label: player.name,
+                // Blocking hides the photo everywhere, including the roster.
+                avatarData: blocked ? null : player.avatarData,
+                size: 38,
+                color: color),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    children: [
+                      Flexible(
+                        child: Text(
+                          player.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontWeight: FontWeight.w700,
+                            fontSize: 15,
+                            color: cs.onSurface,
+                          ),
                         ),
                       ),
-                    ),
-                    if (player.isHost) ...[
-                      const SizedBox(width: 5),
-                      Icon(Icons.shield_rounded, size: 13, color: color),
+                      if (player.isHost) ...[
+                        const SizedBox(width: 5),
+                        Icon(Icons.shield_rounded, size: 13, color: color),
+                      ],
+                      if (blocked) ...[
+                        const SizedBox(width: 5),
+                        Icon(Icons.block_rounded, size: 13, color: cs.error),
+                      ],
                     ],
-                  ],
-                ),
-                Text(
-                  player.isHost ? (isMe ? 'You · Host' : 'Host') : 'Ready',
-                  style: TextStyle(fontSize: 11.5, color: cs.onSurfaceVariant),
-                ),
-              ],
+                  ),
+                  Text(
+                    blocked
+                        ? 'Blocked'
+                        : (player.isHost
+                            ? (isMe ? 'You · Host' : 'Host')
+                            : 'Ready'),
+                    style:
+                        TextStyle(fontSize: 11.5, color: cs.onSurfaceVariant),
+                  ),
+                ],
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

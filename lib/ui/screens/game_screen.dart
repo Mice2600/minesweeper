@@ -14,6 +14,8 @@ import '../../app/theme.dart';
 import '../../audio/sfx.dart';
 import '../../game/difficulty.dart';
 import '../../game/engine.dart';
+import '../../net/messages.dart';
+import '../../state/moderation.dart';
 import '../../state/session.dart';
 import '../../state/skin.dart';
 import '../widgets/avatar.dart';
@@ -24,6 +26,8 @@ import '../widgets/connection_overlay.dart';
 import '../widgets/emoji_bar.dart';
 import '../widgets/emoji_overlay.dart';
 import '../widgets/hearts_bar.dart';
+import '../widgets/moderation_listener.dart';
+import '../widgets/player_actions.dart';
 import '../widgets/how_to_play.dart';
 import '../widgets/particles.dart';
 import '../widgets/screen_shake.dart';
@@ -298,6 +302,7 @@ class _GameScreenState extends ConsumerState<GameScreen> {
             Positioned.fill(
               child: ConnectionOverlay(
                 state: s.connectionState,
+                message: s.errorMessage,
                 onLeave: () async {
                   await ref.read(sessionProvider.notifier).leave();
                   if (!context.mounted) return;
@@ -306,6 +311,8 @@ class _GameScreenState extends ConsumerState<GameScreen> {
               ),
             ),
             const ChatOverlay(),
+            // Surfaces incoming player reports to the host mid-match.
+            const ModerationListener(),
           ],
         ),
       ),
@@ -509,12 +516,18 @@ class _CoachHint extends StatelessWidget {
   }
 }
 
-class _PlayersBar extends StatelessWidget {
+/// Horizontal roster shown above the board. Each chip is also the in-game
+/// entry point to the safety menu — tapping one opens block / report / remove
+/// for that player, so moderation is reachable mid-match and not only from the
+/// lobby.
+class _PlayersBar extends ConsumerWidget {
   const _PlayersBar({required this.players, required this.localId});
-  final List<dynamic> players;
+  final List<PlayerInfo> players;
   final String localId;
+
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final blocked = ref.watch(blockedPlayersProvider);
     return SizedBox(
       height: 56,
       child: ListView.separated(
@@ -525,50 +538,62 @@ class _PlayersBar extends StatelessWidget {
         itemBuilder: (_, i) {
           final p = players[i];
           final isMe = p.id == localId;
-          final offline = p.isOffline == true;
+          final offline = p.isOffline;
+          final isBlocked = blocked.isBlocked(id: p.id, name: p.name);
           return Opacity(
             opacity: offline ? 0.55 : 1.0,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-              decoration: BoxDecoration(
-                color: Color(p.color).withValues(alpha: isMe ? 0.18 : 0.08),
-                borderRadius: BorderRadius.circular(28),
-                border: Border.all(
-                  color: Color(p.color)
-                      .withValues(alpha: isMe ? 0.7 : 0.3),
-                  width: isMe ? 2 : 1,
+            child: GestureDetector(
+              onTap: () => showPlayerActions(context, player: p),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                decoration: BoxDecoration(
+                  color: Color(p.color).withValues(alpha: isMe ? 0.18 : 0.08),
+                  borderRadius: BorderRadius.circular(28),
+                  border: Border.all(
+                    color: Color(p.color)
+                        .withValues(alpha: isMe ? 0.7 : 0.3),
+                    width: isMe ? 2 : 1,
+                  ),
                 ),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Avatar(
-                    seed: p.avatarSeed,
-                    label: p.name,
-                    avatarData: p.avatarData,
-                    size: 30,
-                    color: Color(p.color),
-                  ),
-                  const SizedBox(width: 8),
-                  ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 140),
-                    child: Text(
-                      isMe ? '${p.name} (you)' : p.name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontWeight: FontWeight.w600),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Avatar(
+                      seed: p.avatarSeed,
+                      label: p.name,
+                      avatarData: isBlocked ? null : p.avatarData,
+                      size: 30,
+                      color: Color(p.color),
                     ),
-                  ),
-                  if (offline) ...[
-                    const SizedBox(width: 6),
-                    Icon(
-                      Icons.wifi_off_rounded,
-                      size: 14,
-                      color: Theme.of(context).colorScheme.error,
+                    const SizedBox(width: 8),
+                    ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 140),
+                      child: Text(
+                        isMe ? '${p.name} (you)' : p.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      ),
                     ),
+                    if (isBlocked) ...[
+                      const SizedBox(width: 6),
+                      Icon(
+                        Icons.block_rounded,
+                        size: 14,
+                        color: Theme.of(context).colorScheme.error,
+                      ),
+                    ],
+                    if (offline) ...[
+                      const SizedBox(width: 6),
+                      Icon(
+                        Icons.wifi_off_rounded,
+                        size: 14,
+                        color: Theme.of(context).colorScheme.error,
+                      ),
+                    ],
+                    const SizedBox(width: 8),
                   ],
-                  const SizedBox(width: 8),
-                ],
+                ),
               ),
             ),
           );
