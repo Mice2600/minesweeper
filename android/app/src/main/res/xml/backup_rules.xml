@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android auto-backup scope (API 23-30).
+
+  Coin packs are real-money consumables granted straight into SharedPreferences
+  with no server ledger and no receipt record, so without this an uninstall or a
+  new device destroys purchased currency with no way to restore it. Backup was
+  already happening by default; naming the file here makes it deliberate and
+  keeps it working if allowBackup semantics change.
+
+  Excluded: the reconnect/session scratch state, which is meaningless off-device.
+-->
+<full-backup-content>
+    <include domain="sharedpref" path="." />
+</full-backup-content>

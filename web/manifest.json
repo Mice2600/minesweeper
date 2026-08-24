@@ -1,11 +1,11 @@
 {
-    "name": "minesweeper",
-    "short_name": "minesweeper",
+    "name": "Minesweeper Co-op",
+    "short_name": "Minesweeper",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#000000",
     "theme_color": "#6000E7",
-    "description": "Multiplayer LAN Minesweeper",
+    "description": "Co-op Minesweeper — play the same board together, online with a room code or over local Wi-Fi.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

@@ -459,7 +459,11 @@ class SessionNotifier extends Notifier<SessionState> {
     _joinMode = mode;
     _joinLanUri = lanUri;
     _joinRoomCode = normalizedRoomCode;
-    _rejoinToken = shortId(20);
+    // Not minted here: the host issues the token and hands it back in
+    // SWelcome. A self-declared identity is one a client can choose, which is
+    // exactly what the token must not be. Stays null until the first join
+    // lands, so the very first CJoin simply carries no token.
+    _rejoinToken = null;
     Analytics.instance.joinStarted(mode: mode.name);
     _reconnectAttempt = 0;
     _reconnectTimer?.cancel();
@@ -692,7 +696,12 @@ class SessionNotifier extends Notifier<SessionState> {
   void _handleServerMessage(ServerMessage msg) {
     final snap = state.snapshot;
     switch (msg) {
-      case SWelcome(:final yourId):
+      case SWelcome(:final yourId, :final rejoinToken):
+        // The host issues the token (v7+); hold on to it so every subsequent
+        // CJoin can prove we're the same player. Never overwrite a token we
+        // already hold with null — the provisional welcome sent on connect,
+        // before CJoin is processed, carries none.
+        if (rejoinToken != null) _rejoinToken = rejoinToken;
         state = state.copyWith(localId: yourId);
       case SLobby(
           :final players,

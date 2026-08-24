@@ -20,6 +20,16 @@ class _MenuBannerState extends State<MenuBanner> {
   @override
   void initState() {
     super.initState();
+    _create();
+  }
+
+  /// The SDK initializes after the first frame, so the menu can mount before
+  /// ads are ready. Waiting on [Ads.whenReady] is what stops that race from
+  /// showing no banner for the rest of the session — [Ads.createMenuBanner]
+  /// returns null while the SDK is still coming up, and nothing retried.
+  Future<void> _create() async {
+    await Ads.instance.whenReady;
+    if (!mounted) return;
     _ad = Ads.instance.createMenuBanner(
       onLoaded: () {
         if (mounted) setState(() => _loaded = true);

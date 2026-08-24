@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:minesweeper/core/moderation.dart';
 import 'package:minesweeper/state/moderation.dart';
@@ -158,6 +160,64 @@ void main() {
 
     test('an unrecognized slug degrades to `other` instead of throwing', () {
       expect(ReportReason.fromSlug('from-a-newer-build'), ReportReason.other);
+    });
+  });
+
+  group('sanitizeAvatar', () {
+    // A minimal but structurally valid JPEG: SOI, APP0/JFIF, EOI.
+    final jpeg = base64Encode(<int>[
+      0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, //
+      0x4A, 0x46, 0x49, 0x46, 0x00, 0x01, //
+      0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, //
+      0xFF, 0xD9,
+    ]);
+
+    test('a real JPEG passes through unchanged', () {
+      expect(Moderation.sanitizeAvatar(jpeg), jpeg);
+    });
+
+    test('null and empty become null', () {
+      expect(Moderation.sanitizeAvatar(null), isNull);
+      expect(Moderation.sanitizeAvatar(''), isNull);
+    });
+
+    test('an oversized payload is rejected, not truncated', () {
+      // The DoS case: every device in the room decodes this blob.
+      final huge = 'A' * (Moderation.maxAvatarBase64Length + 1);
+      expect(Moderation.sanitizeAvatar(huge), isNull);
+    });
+
+    test('a payload at the cap is still allowed if it is a JPEG', () {
+      final padded = base64Encode(<int>[
+        0xFF, 0xD8, 0xFF, //
+        ...List<int>.filled(8 * 1024, 0x00),
+      ]);
+      expect(padded.length, lessThan(Moderation.maxAvatarBase64Length));
+      expect(Moderation.sanitizeAvatar(padded), padded);
+    });
+
+    test('malformed base64 is rejected', () {
+      expect(Moderation.sanitizeAvatar('not base64 !!!'), isNull);
+    });
+
+    test('valid base64 that is not a JPEG is rejected', () {
+      expect(Moderation.sanitizeAvatar(base64Encode(<int>[1, 2, 3, 4])), isNull);
+    });
+  });
+
+  group('emoji whitelist', () {
+    test('every reaction the bar offers is allowed', () {
+      for (final e in Moderation.emojiReactions) {
+        expect(Moderation.isAllowedEmoji(e), isTrue, reason: '$e was rejected');
+      }
+    });
+
+    test('arbitrary text is not an emoji', () {
+      // The bypass this closes: the reaction channel is not chat, and must not
+      // be usable as chat that skips the profanity filter.
+      expect(Moderation.isAllowedEmoji('you fuck'), isFalse);
+      expect(Moderation.isAllowedEmoji(''), isFalse);
+      expect(Moderation.isAllowedEmoji('🦄'), isFalse);
     });
   });
 

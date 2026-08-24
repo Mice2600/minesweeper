@@ -23,15 +23,31 @@ class Ads {
   /// True once the SDK is initialized and ads may be shown.
   bool get available => _ready;
 
+  final Completer<void> _initDone = Completer<void>();
+
+  /// Completes when [init] has finished — successfully or not, so awaiting it
+  /// never hangs. [init] runs after `runApp` (see main.dart), so a widget that
+  /// creates an ad on mount would otherwise race it and silently get nothing;
+  /// await this first and then check [available].
+  Future<void> get whenReady => _initDone.future;
+
+  void _completeInit() {
+    if (!_initDone.isCompleted) _initDone.complete();
+  }
+
   InterstitialAd? _interstitial;
   RewardedAd? _rewarded;
 
   /// Initializes the consent flow then the Mobile Ads SDK, and preloads one
   /// interstitial + one rewarded ad. Never throws — on any failure ads stay off.
   Future<void> init() async {
-    if (!_supported) return;
+    if (!_supported) {
+      _completeInit();
+      return;
+    }
     try {
       await _gatherConsent();
+      await _applyRequestConfiguration();
       await MobileAds.instance.initialize();
       _ready = true;
       _loadInterstitial();
@@ -40,7 +56,58 @@ class Ads {
     } catch (e) {
       _ready = false;
       if (kDebugMode) debugPrint('[ads] init failed: $e');
+    } finally {
+      _completeInit();
     }
+  }
+
+  /// Constrains what ads may be served, to match what the store listing claims.
+  ///
+  /// The app is rated Teen (13+) — chat and shared photos between strangers put
+  /// it there — so ad content is capped at the same rating. Without this the
+  /// SDK may serve content above the rating the app declares, which is a policy
+  /// problem regardless of whether anyone complains.
+  ///
+  /// `tagForChildDirectedTreatment: no` states the app is not child-directed.
+  /// That has to stay consistent with the Play Console: the app targets 13+ and
+  /// is deliberately not enrolled in Designed for Families.
+  Future<void> _applyRequestConfiguration() =>
+      MobileAds.instance.updateRequestConfiguration(
+        RequestConfiguration(
+          maxAdContentRating: MaxAdContentRating.t,
+          tagForChildDirectedTreatment: TagForChildDirectedTreatment.no,
+        ),
+      );
+
+  /// UMP treats this device as being in the EEA, so the consent form and the
+  /// privacy-options entry point can be exercised from anywhere. Pass the
+  /// device's *hashed* id — the UMP SDK prints it to logcat on first run:
+  ///
+  /// ```sh
+  /// flutter run --dart-define=UMP_TEST_DEVICE=33BE2250B43518CCDA7DE426D04EE231
+  /// ```
+  ///
+  /// Inert unless the define is passed, so shipped builds get the real
+  /// geography. Deliberately *not* gated on [kDebugMode]: UMP only honours a
+  /// forced geography for the specific hashed device id listed here, and some
+  /// devices (Xiaomi/HyperOS) refuse to install debuggable APKs at all — so a
+  /// debug-only hook would make the consent flow untestable on exactly the
+  /// hardware you have. Without this there is no way to see that flow outside
+  /// the EEA/UK, which makes it the one part of the ads path that silently
+  /// goes untested.
+  static const String _umpTestDevice =
+      String.fromEnvironment('UMP_TEST_DEVICE');
+
+  ConsentRequestParameters _consentParams() {
+    if (_umpTestDevice.isNotEmpty) {
+      return ConsentRequestParameters(
+        consentDebugSettings: ConsentDebugSettings(
+          debugGeography: DebugGeography.debugGeographyEea,
+          testIdentifiers: [_umpTestDevice],
+        ),
+      );
+    }
+    return ConsentRequestParameters();
   }
 
   /// Requests UMP consent info and shows the consent form if required (EEA/UK).
@@ -48,7 +115,7 @@ class Ads {
   Future<void> _gatherConsent() async {
     final completer = Completer<void>();
     ConsentInformation.instance.requestConsentInfoUpdate(
-      ConsentRequestParameters(),
+      _consentParams(),
       () async {
         try {
           await ConsentForm.loadAndShowConsentFormIfRequired((_) {});
@@ -60,6 +127,45 @@ class Ads {
         if (!completer.isCompleted) completer.complete();
       },
     );
+    return completer.future;
+  }
+
+  // ─── Privacy options ────────────────────────────────────────────────────────
+
+  /// Whether this user needs a persistent way to revisit their ad-consent
+  /// choice — true in the EEA/UK, false almost everywhere else.
+  ///
+  /// Collecting consent once is only half of what UMP expects; a user who has
+  /// consented must be able to change their mind later. The About screen shows
+  /// its privacy-options row only when this is true, so users outside the EEA
+  /// don't get a control that opens nothing.
+  Future<bool> privacyOptionsRequired() async {
+    if (!_supported) return false;
+    try {
+      final status =
+          await ConsentInformation.instance.getPrivacyOptionsRequirementStatus();
+      return status == PrivacyOptionsRequirementStatus.required;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Re-opens the consent form so the user can change their choice. Returns
+  /// false if the form couldn't be shown. Never throws.
+  Future<bool> showPrivacyOptions() async {
+    if (!_supported) return false;
+    final completer = Completer<bool>();
+    try {
+      await ConsentForm.showPrivacyOptionsForm((FormError? error) {
+        if (kDebugMode && error != null) {
+          debugPrint('[ads] privacy options error: ${error.message}');
+        }
+        if (!completer.isCompleted) completer.complete(error == null);
+      });
+    } catch (e) {
+      if (kDebugMode) debugPrint('[ads] privacy options failed: $e');
+      if (!completer.isCompleted) completer.complete(false);
+    }
     return completer.future;
   }
 

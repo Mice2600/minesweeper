@@ -4,6 +4,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../ads/ads.dart';
 import '../../app/theme.dart';
 
 /// Public privacy-policy URL shown to users and required by the app stores.
@@ -110,11 +111,22 @@ class AboutScreen extends StatelessWidget {
                           label: 'Privacy Policy',
                           onTap: () => _open(context, kPrivacyPolicyUrl),
                         ),
+                        const _PrivacyOptionsRow(),
                         _LinkRow(
                           icon: Icons.mail_outline_rounded,
                           label: kSupportEmail,
                           onTap: () =>
                               _open(context, 'mailto:$kSupportEmail'),
+                        ),
+                        // Flutter bundles the generated NOTICES file into every
+                        // build; without an entry point the attribution the
+                        // BSD/MIT/Apache dependencies require ships but can't
+                        // be read. showLicensePage populates itself from it.
+                        _LinkRow(
+                          icon: Icons.description_outlined,
+                          label: 'Open source licences',
+                          external: false,
+                          onTap: () => _openLicenses(context),
                         ),
                       ],
                     ),
@@ -133,6 +145,20 @@ class AboutScreen extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+
+  /// Shows Flutter's built-in licence viewer, populated from the NOTICES file
+  /// generated at build time. The version is read from the binary for the same
+  /// reason [_VersionLabel] does it — so it can't drift from what shipped.
+  Future<void> _openLicenses(BuildContext context) async {
+    final info = await PackageInfo.fromPlatform();
+    if (!context.mounted) return;
+    showLicensePage(
+      context: context,
+      applicationName: 'Minesweeper Co-op',
+      applicationVersion: 'Version ${info.version} (build ${info.buildNumber})',
+      applicationLegalese: '© 2026 Lacon',
     );
   }
 
@@ -169,6 +195,42 @@ class _VersionLabel extends StatelessWidget {
           ),
         );
       },
+    );
+  }
+}
+
+/// Ad-consent entry point, shown only where it's actually required (EEA/UK).
+///
+/// Collecting consent once isn't enough — a user who consented has to be able
+/// to revisit that choice, which is what UMP's privacy options form is for.
+/// Stateful so the requirement check runs once on open rather than on every
+/// rebuild, and so the row can disappear cleanly where it doesn't apply.
+class _PrivacyOptionsRow extends StatefulWidget {
+  const _PrivacyOptionsRow();
+
+  @override
+  State<_PrivacyOptionsRow> createState() => _PrivacyOptionsRowState();
+}
+
+class _PrivacyOptionsRowState extends State<_PrivacyOptionsRow> {
+  bool _required = false;
+
+  @override
+  void initState() {
+    super.initState();
+    Ads.instance.privacyOptionsRequired().then((required) {
+      if (mounted && required) setState(() => _required = true);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_required) return const SizedBox.shrink();
+    return _LinkRow(
+      icon: Icons.tune_rounded,
+      label: 'Ad privacy options',
+      external: false,
+      onTap: () => Ads.instance.showPrivacyOptions(),
     );
   }
 }

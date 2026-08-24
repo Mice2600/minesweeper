@@ -977,6 +977,30 @@ class _LanRoomCard extends StatelessWidget {
                 ),
               ),
             ),
+          const SizedBox(height: 14),
+          // The LAN server binds every interface with no pairing step and mDNS
+          // advertises it, so "local Wi-Fi" means everyone on the network, not
+          // just the people you told. That's fine at home and surprising on
+          // shared or public Wi-Fi — say so rather than let people find out.
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(Icons.info_outline_rounded,
+                  size: 15, color: cs.onSurfaceVariant),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  'Anyone on this Wi-Fi can find and join this room. On public '
+                  'or shared networks, prefer hosting online with a room code.',
+                  style: TextStyle(
+                    color: cs.onSurfaceVariant,
+                    fontSize: 11.5,
+                    height: 1.35,
+                  ),
+                ),
+              ),
+            ],
+          ),
         ],
       ),
     );

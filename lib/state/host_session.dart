@@ -2,6 +2,7 @@ import 'dart:async';
 
 import '../core/ids.dart';
 import '../core/moderation.dart';
+import '../core/rate_limit.dart';
 import '../game/board.dart';
 import '../game/difficulty.dart';
 import '../game/engine.dart';
@@ -77,11 +78,11 @@ class HostSession {
     _joinInfo = info;
     _players[hostId] = PlayerInfo(
       id: hostId,
-      // The host is subject to the same name filter as everyone else — they
-      // are the moderator, not exempt from moderation.
+      // The host is subject to the same name and avatar filters as everyone
+      // else — they are the moderator, not exempt from moderation.
       name: Moderation.sanitizeName(hostName),
       avatarSeed: hostAvatarSeed,
-      avatarData: hostAvatarData,
+      avatarData: Moderation.sanitizeAvatar(hostAvatarData),
       color: _colorFor(0),
       isHost: true,
       isReady: true,
@@ -167,12 +168,34 @@ class HostSession {
       final stillOffline = _players[logicalId]?.isOffline ?? false;
       if (!stillOffline) return;
       _players.remove(logicalId);
+      _rateLimits.remove(logicalId);
       final token = _playerToken.remove(logicalId);
       if (token != null) _tokenToPlayer.remove(token);
       _broadcastLobby();
     });
   }
 
+
+  // ─── Flood control ─────────────────────────────────────────────────────────
+
+  /// One budget per logical player, created lazily on first message and torn
+  /// down with the player so a long-lived room doesn't accumulate buckets.
+  final Map<String, PlayerRateLimits> _rateLimits = {};
+
+  /// False when [logicalId] has exceeded its budget for this message kind and
+  /// the caller should drop it. Message types that can't be spammed usefully
+  /// (join, ping, ready, kick, report, lifecycle) are not metered — CJoin and
+  /// CPing never reach here anyway.
+  bool _withinRateLimit(String logicalId, ClientMessage msg) {
+    final limits = _rateLimits.putIfAbsent(logicalId, PlayerRateLimits.new);
+    return switch (msg) {
+      CChat() => limits.chat.tryConsume(),
+      CEmoji() => limits.emoji.tryConsume(),
+      CCursor() || CCursorLeave() => limits.cursor.tryConsume(),
+      CReveal() || CFlag() || CChord() => limits.board.tryConsume(),
+      _ => true,
+    };
+  }
   // ─── Game logic dispatch ───────────────────────────────────────────────────
 
   /// [transportId] is whatever the transport tagged the inbound message with
@@ -181,6 +204,27 @@ class HostSession {
   /// (CJoin/rejoin populates this).
   void _applyClientMessage(String transportId, ClientMessage msg) {
     final logicalId = _logicalIdFor(transportId);
+
+    // Everything below acts on behalf of a player, so a connection that hasn't
+    // completed CJoin gets no further. Without this, `_logicalIdFor` falls back
+    // to the raw transport id and an un-joined socket can drive the engine and
+    // broadcast chat. CJoin is how you become a player; CPing has to answer
+    // before that to keep the liveness handshake working.
+    if (msg is! CJoin && msg is! CPing && !_players.containsKey(logicalId)) {
+      return;
+    }
+
+
+    // Flood control. The host fans most of these out to every other player, so
+    // an unthrottled guest is an amplifier. Over-budget messages are dropped
+    // silently — replying with an error would amplify in its place.
+    //
+    // The host is exempt: its intents come from its own UI, it is already the
+    // authority, and throttling it could only ever drop a legitimate action.
+    if (logicalId != hostId && !_withinRateLimit(logicalId, msg)) {
+      return;
+    }
+
     switch (msg) {
       case CJoin(:final name, :final avatarSeed, :final rejoinToken, :final avatarData):
         _handleJoin(transportId, name, avatarSeed, rejoinToken, avatarData);
@@ -201,9 +245,9 @@ class HostSession {
         }
         this.config = config;
         _engine = GameEngine(config);
+        // The seed stays on the host — see the v7 note in messages.dart.
         _broadcast(SGameStarted(
           config: config,
-          seed: _engine!.seed,
           startedAt: DateTime.now().millisecondsSinceEpoch,
         ));
       case CReveal(:final x, :final y):
@@ -267,6 +311,10 @@ class HostSession {
         _broadcast(SCursorLeave(playerId: logicalId),
             excludePlayerId: logicalId);
       case CEmoji(:final code):
+        // Reactions are UGC too. Only the codes the emoji bar actually offers
+        // get through, so this channel can't carry arbitrary text past the
+        // chat filter below.
+        if (!Moderation.isAllowedEmoji(code)) return;
         _broadcast(SEmoji(playerId: logicalId, code: code));
       case CChat(:final text):
         // Authoritative filtering: the host masks before re-broadcast, so a
@@ -303,10 +351,12 @@ class HostSession {
     String rawName,
     String avatarSeed,
     String? rejoinToken,
-    String? avatarData,
+    String? rawAvatarData,
   ) {
     // A kicked player keeps their rejoin token across reconnects, so this is
-    // what makes the removal stick for the life of the room.
+    // what makes the removal stick against an unmodified client. (A patched
+    // one can drop the token and come back as someone new — closing that needs
+    // transport-level peer identity, which the transport seam doesn't carry.)
     if (rejoinToken != null && _bannedTokens.contains(rejoinToken)) {
       _evict(transportId, 'The host removed you from this game.');
       return;
@@ -315,18 +365,48 @@ class HostSession {
     // Names are user-generated content shown to everyone in the room, so they
     // go through the same filter as chat — on the host, which is authoritative.
     final name = Moderation.sanitizeName(rawName);
+    // So is the avatar: it's an attacker-controllable blob that every device in
+    // the room decodes. Oversized or non-JPEG payloads become "no photo".
+    final avatarData = Moderation.sanitizeAvatar(rawAvatarData);
 
     // 1) Rejoin path: token matches a player we're holding inside the grace
     //    window. Reuse their logical id (and color and stats and board
     //    ownership). Cancel the eviction timer.
     if (rejoinToken != null && _tokenToPlayer.containsKey(rejoinToken)) {
       final oldLogicalId = _tokenToPlayer[rejoinToken]!;
+      final existing = _players[oldLogicalId];
+
+      // A token only rebinds a slot its owner isn't currently sitting in.
+      // Without this, anyone holding a captured token could repoint the slot
+      // at themselves mid-game and the real player would silently stop
+      // receiving anything addressed to them.
+      //
+      // The same-transport case is the host-reclaim path, not an attack: when
+      // an online host reclaims its room, the relay replays the *existing*
+      // guest ids and each guest re-sends CJoin over a socket that never
+      // dropped — so they are still online and still bound to this transport.
+      final isSameConnection = _logicalToTransport[oldLogicalId] == transportId;
+      if (existing != null &&
+          !existing.isOffline &&
+          !_graceTimers.containsKey(oldLogicalId) &&
+          !isSameConnection) {
+        // Addressed to the raw transport, not via _sendTo — the caller isn't a
+        // known player, so there's no logical id to map back from.
+        transport.sendToGuest(
+          transportId,
+          const SError(
+            code: 'slotBusy',
+            message: 'That player is already connected.',
+          ),
+        );
+        return;
+      }
+
       _graceTimers.remove(oldLogicalId)?.cancel();
 
       // Re-bind this transport connection to the old logical id.
       _bindTransport(transportId, oldLogicalId);
 
-      final existing = _players[oldLogicalId];
       if (existing != null) {
         _players[oldLogicalId] = PlayerInfo(
           id: oldLogicalId,
@@ -340,27 +420,32 @@ class HostSession {
         );
       } else {
         // The grace timer had already fired before this rejoin landed —
-        // treat it as a fresh join under the supplied token instead of
-        // creating an orphaned record.
+        // treat it as a fresh join instead of creating an orphaned record.
         _materializeNewPlayer(
-            transportId, name, avatarSeed, avatarData: avatarData, token: rejoinToken);
+            transportId, name, avatarSeed, avatarData: avatarData);
         return;
       }
 
-      // Tell the rejoining guest their authoritative id, then refresh the
-      // lobby for everyone, then catch this guest up mid-game.
+      // Tell the rejoining guest their authoritative id, echoing the token
+      // back so a guest that lost its copy is made whole. Then refresh the
+      // lobby for everyone and catch this guest up mid-game.
       transport.sendToGuest(
         transportId,
-        SWelcome(yourId: oldLogicalId, protocol: protocolVersion),
+        SWelcome(
+          yourId: oldLogicalId,
+          protocol: protocolVersion,
+          rejoinToken: rejoinToken,
+        ),
       );
       _broadcastLobby();
       _sendMidGameSnapshot(oldLogicalId, transportId);
       return;
     }
 
-    // 2) Fresh join.
-    _materializeNewPlayer(
-        transportId, name, avatarSeed, avatarData: avatarData, token: rejoinToken ?? shortId(20));
+    // 2) Fresh join. Note what is *not* honoured here: a client-supplied
+    //    rejoinToken that the host doesn't recognise. Identity is issued by
+    //    the host, never self-declared, or a client could pick its own.
+    _materializeNewPlayer(transportId, name, avatarSeed, avatarData: avatarData);
   }
 
   void _materializeNewPlayer(
@@ -368,9 +453,9 @@ class HostSession {
     String name,
     String avatarSeed, {
     String? avatarData,
-    required String token,
   }) {
     final logicalId = transportId; // brand-new player: ids coincide
+    final token = shortId(20);
     _bindTransport(transportId, logicalId);
     _playerToken[logicalId] = token;
     _tokenToPlayer[token] = logicalId;
@@ -380,6 +465,17 @@ class HostSession {
       avatarSeed: avatarSeed,
       avatarData: avatarData,
       color: _colorFor(_players.length),
+    );
+    // Hand the guest its host-issued token. This is the only place a new token
+    // reaches a client in the lobby — SSnapshot echoes one too, but the host
+    // skips that entirely until a game is underway.
+    transport.sendToGuest(
+      transportId,
+      SWelcome(
+        yourId: logicalId,
+        protocol: protocolVersion,
+        rejoinToken: token,
+      ),
     );
     _broadcastLobby();
     // If a game is already underway, hand them a full board state so they
@@ -554,6 +650,7 @@ class HostSession {
     _players.remove(targetId);
     if (token != null) _tokenToPlayer.remove(token);
     _playerToken.remove(targetId);
+    _rateLimits.remove(targetId);
     _broadcastLobby();
   }
 

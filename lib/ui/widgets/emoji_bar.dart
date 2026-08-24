@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../core/moderation.dart';
+
 /// Font fallbacks so emoji render as proper colour glyphs even though the app's
 /// default text theme is Nunito (which has no emoji). Flutter tries the primary
 /// family per-glyph, then walks these for anything missing.
@@ -15,7 +17,10 @@ class EmojiBar extends StatelessWidget {
   const EmojiBar({super.key, required this.onSend});
   final ValueChanged<String> onSend;
 
-  static const _emojis = ['👍', '❤️', '😂', '😮', '🎉', '🤔', '🚩', '💣'];
+  /// The set lives in [Moderation] because the host validates against it —
+  /// keeping one list means the bar can't drift out of sync with what the
+  /// host will actually accept and re-broadcast.
+  static const _emojis = Moderation.emojiReactions;
 
   @override
   Widget build(BuildContext context) {

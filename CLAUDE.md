@@ -65,7 +65,7 @@ The layers, top to bottom:
 
 `lib/net/messages.dart` is the single protocol definition, used identically by LAN and relay. `ClientMessage` (guest→host) and `ServerMessage` (host→guest) are sealed classes; each `encode()`s to `{"t": type, "d": payload}` and decodes via a `switch`. Key conventions when changing it:
 
-- **`protocolVersion`** (currently 6) — bump on a breaking change. Read the doc comment for the version history (e.g. v4 packed `SRevealed.cells` into flat `[x,y,v,...]` triplets; v6 added the moderation messages).
+- **`protocolVersion`** (currently 7) — bump on a breaking change. Read the doc comment for the version history (e.g. v4 packed `SRevealed.cells` into flat `[x,y,v,...]` triplets; v6 added the moderation messages; v7 removed the board seed from `SGameStarted` and added the host-issued `rejoinToken` to `SWelcome`).
 - **Forward compatibility**: an unknown `t` decodes to `CUnknown`/`SUnknown` (ignored), never throws. This lets a newer peer add messages without dropping the connection. Preserve this — decoders must not throw on unknown types.
 - **Backward compatibility**: decoders accept legacy shapes (e.g. `_decodeReveals` reads both packed triplets and old map arrays; `SFlagged` keeps a legacy `flagged` bool alongside `mark`). Keep both when evolving a message.
 - The cell encoding `-2 hidden, -1 mine, 0..8 number` is shared between `GameSnapshot.cells` and `SSnapshot.cells`.
@@ -75,7 +75,7 @@ The layers, top to bottom:
 Both sides survive socket drops:
 
 - **Logical vs transport ids**: a guest gets a fresh transport id on every (re)connect, but their *logical* player id (used for board ownership, stats, color) must be stable. `HostSession` keeps `_transportToLogical` / `_logicalToTransport` maps. On disconnect the player is marked `isOffline` and held for a 30s **grace window** (`_graceTimers`) before eviction.
-- **Rejoin token**: the guest mints a `_rejoinToken` once per join (`SessionNotifier`) and resends it in `CJoin` on every reconnect. If the host still holds that token within the grace window, it rebinds the new transport to the old logical id, restores the slot, and replays state via `SSnapshot` (full mid-game board catch-up). Tokens are echoed back in `SSnapshot.rejoinToken`.
+- **Rejoin token**: the **host** mints the token in `_materializeNewPlayer` and hands it to the guest in `SWelcome.rejoinToken` (v7); the guest stores it and resends it in `CJoin` on every reconnect. Identity is issued, never self-declared — a client-supplied token the host doesn't recognise is ignored, and a fresh join always gets a new one. If the host holds that token within the grace window **and the slot's owner is actually absent**, it rebinds the new transport to the old logical id, restores the slot, and replays state via `SSnapshot` (full mid-game board catch-up). The absence check is what stops a captured token from hijacking a live player; it deliberately exempts a rebind from the *same* transport, which is the online-host-reclaim path (guests re-send `CJoin` over sockets that never dropped). Tokens are also echoed in `SSnapshot.rejoinToken`.
 - **Guest reconnect loop**: `SessionNotifier._attemptConnect` / `_scheduleReconnect` with backoff `[1,2,4,8,8,8]`s; cut short when the app returns to foreground (`_onAppResumed`).
 - **Online host reclaim**: the relay holds the room open in its own grace window if the *host* drops. `RelayHostTransport` reclaims via `/reclaim/<code>?token=<hostToken>` with the same backoff, surfacing `reclaiming`/`reclaimed` transport errors that `HostSession` translates into `SHostAway`/`SHostBack`. Guests see those and re-send `CJoin`.
 - **Liveness**: guests `CPing` every ~8s; host replies `SPong` (filtered inside the relay transport, never surfaced to the session). Both sides force-close a half-open socket after a dead-timeout.
@@ -93,7 +93,12 @@ mechanisms, deliberately at different layers:
   two lists: `_blockedAnywhere` (substring-safe, catches `f.u.c.k`) and
   `_blockedWords` (whole-token only, so `grass` and `analysis` survive). Applied
   in `HostSession` to every `CJoin` name and every `CChat` line *before*
-  broadcast, so a patched client can't push raw text to the room.
+  broadcast, so a patched client can't push raw text to the room. The same file
+  also owns the two non-text UGC guards, for the same reason — they're what a
+  hostile client would otherwise reach: `sanitizeAvatar` (rejects any avatar
+  that isn't an in-budget JPEG, since every device in the room decodes it) and
+  `emojiReactions`/`isAllowedEmoji` (the reaction channel accepts only the codes
+  the emoji bar offers, so it can't be used as chat that skips the filter).
 - **Blocking — client-side, local.** `lib/state/moderation.dart`. The host owns
   who's in the room; each player owns what they see. Blocked authors are dropped
   in `SessionNotifier._handleServerMessage` at receive time (chat, emoji,
@@ -107,7 +112,12 @@ mechanisms, deliberately at different layers:
   transport's disconnect event, bans their rejoin token for the life of the
   room, and evicts via `HostTransport.disconnectGuest`. `SKicked` puts the guest
   into `SessionConnState.kicked`, which cancels the reconnect loop — retrying
-  would be futile since the token is banned.
+  would be futile since the token is banned. **Known limit**: the ban binds a
+  token, and a modified client can simply discard its token and rejoin as
+  someone new. Closing that needs stable peer identity plumbed through the
+  transport seam (a `peerKey` on `GuestConnected`, from the remote address on
+  LAN and a relay-forwarded `CF-Connecting-IP` online) — deliberately not built
+  yet. Don't describe the kick as unconditional.
 
 UI entry points: `showPlayerActions()` in `lib/ui/widgets/player_actions.dart`,
 reachable from the lobby slots, the in-game player bar, join-screen chips, and

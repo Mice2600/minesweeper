@@ -23,7 +23,11 @@ plugins {
     // START: FlutterFire Configuration
     id("com.google.gms.google-services") version("4.3.15") apply false
     // END: FlutterFire Configuration
-    id("org.jetbrains.kotlin.android") version "2.1.0" apply false
+    // Must stay >= the Kotlin version the AdMob SDK was built with:
+    // play-services-ads 25.3.0 carries Kotlin 2.3.0 metadata, and compiling
+    // against it with an older Kotlin fails with "Module was compiled with an
+    // incompatible version of Kotlin". Bump this when bumping google_mobile_ads.
+    id("org.jetbrains.kotlin.android") version "2.3.0" apply false
 }
 
 include(":app")

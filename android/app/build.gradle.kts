@@ -1,5 +1,6 @@
 import java.util.Properties
 import java.io.FileInputStream
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
     id("com.android.application")
@@ -31,8 +32,13 @@ android {
         targetCompatibility = JavaVersion.VERSION_11
     }
 
-    kotlinOptions {
-        jvmTarget = JavaVersion.VERSION_11.toString()
+    // Kotlin 2.3 removed the old `kotlinOptions { jvmTarget = "..." }` String
+    // DSL, so this is the compilerOptions form. Keep it in step with the Java
+    // source/target compatibility above.
+    kotlin {
+        compilerOptions {
+            jvmTarget.set(JvmTarget.JVM_11)
+        }
     }
 
     defaultConfig {
@@ -40,8 +46,11 @@ android {
         applicationId = "dev.lacon.minesweeper"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        // Firebase requires minSdk 23+, so pin it rather than the Flutter default.
-        minSdk = maxOf(23, flutter.minSdkVersion)
+        // Floor comes from the plugins, not from us: Firebase needs 23+, and
+        // google_mobile_ads 9.x (GMA Android SDK 25.x) needs 24+. Pinned rather
+        // than inherited so a Flutter default that drops below 24 fails here
+        // instead of deep inside a plugin's manifest merge.
+        minSdk = maxOf(24, flutter.minSdkVersion)
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName

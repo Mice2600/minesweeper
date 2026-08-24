@@ -27,6 +27,11 @@ class StoreScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final store = ref.watch(storeProvider);
     final equipped = ref.watch(boardSkinProvider);
+    // Falls back to the live value while the SDK is still starting up, so the
+    // section appears as soon as ads are ready rather than staying hidden for
+    // however long this screen happens to remain mounted.
+    final adsReady =
+        ref.watch(adsReadyProvider).value ?? Ads.instance.available;
     final iap = ref.watch(iapProvider);
 
     // Surface a billing error as a SnackBar.
@@ -72,11 +77,11 @@ class StoreScreen extends ConsumerWidget {
         top: false,
         child: CustomScrollView(
           slivers: [
-            if (iap.available || Ads.instance.available) ...[
+            if (iap.available || adsReady) ...[
               SliverToBoxAdapter(
                 child: _CoinPacksSection(
                   iap: iap,
-                  showRewarded: Ads.instance.available,
+                  showRewarded: adsReady,
                 ),
               ),
               _SliverSectionHeader(label: 'Board skins'),

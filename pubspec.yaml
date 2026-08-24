@@ -1,5 +1,5 @@
 name: minesweeper
-description: "Multiplayer LAN Minesweeper"
+description: "Co-op Minesweeper — one shared board, online or over local Wi-Fi."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev
@@ -58,7 +58,7 @@ dependencies:
   firebase_core: ^3.6.0
   firebase_analytics: ^11.3.3
   in_app_purchase: ^3.2.0
-  google_mobile_ads: ^5.2.0
+  google_mobile_ads: ^9.0.0
 
 dev_dependencies:
   flutter_test:
@@ -81,8 +81,14 @@ flutter_launcher_icons:
   android: "ic_launcher"
   ios: false
   min_sdk_android: 21
-  adaptive_icon_background: "#000000"
-  adaptive_icon_foreground: "assets/icon/icon.png"
+  # Android masks the adaptive foreground to a circle/squircle and applies
+  # parallax, so only the central ~66% is guaranteed visible. icon.png is a
+  # full-bleed store icon — using it directly cropped its border, corners and
+  # the flag in the bottom-right. icon_foreground.png is the same art scaled
+  # into that safe zone; the background colour is sampled from the artwork's
+  # gradient so the padding doesn't read as a letterbox.
+  adaptive_icon_background: "#5A019D"
+  adaptive_icon_foreground: "assets/icon/icon_foreground.png"
   web:
     generate: true
     image_path: "assets/icon/icon.png"
@@ -104,10 +110,18 @@ flutter:
   # the material Icons class.
   uses-material-design: true
 
-  # To add assets to your application, add an assets section, like this:
-  # assets:
-  #   - images/a_dot_burr.jpeg
-  #   - images/a_dot_ham.jpeg
+  assets:
+    # Bundled Google Fonts. `google_fonts` looks these up in the asset manifest
+    # by filename — `<Family>-<Weight>.ttf`, where the family is the package's
+    # internal name ('JetBrainsMono', no space) — and only falls back to a
+    # network fetch if no match is found. Runtime fetching is disabled in
+    # main(), so anything missing here renders in the system font instead.
+    #
+    # They are bundled rather than fetched so the app makes no request to
+    # fonts.gstatic.com: that was an undisclosed third-party call carrying the
+    # user's IP, and it left headings in a fallback face on a cold offline
+    # start. Add the matching weight here before using a new one.
+    - assets/google_fonts/
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

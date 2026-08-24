@@ -178,7 +178,7 @@ see it:
 | Content filtering | [lib/core/moderation.dart](lib/core/moderation.dart) — leetspeak/accent-folding profanity filter applied by the **host** to every display name and chat line before broadcast |
 | In-app reporting | Tap any player (lobby slot, in-game player bar, chat avatar, or long-press a chat message) → **Report** with a reason picker. Files to the host, keeps a local copy under **About → Safety**, and offers an email escalation to the developer |
 | In-app blocking | Same menu → **Block**. Hides that player's messages, reactions, cursor, and profile photo. Persists across sessions by name; managed under **About → Safety** |
-| Removal by moderator | The host sees **Remove from game** on the same menu. The kicked player is disconnected and their rejoin token is refused for the life of the room |
+| Removal by moderator | The host sees **Remove from game** on the same menu. The kicked player is disconnected and the host-issued rejoin token they hold is refused for the life of the room. Note this is enforced against the shipped client: a modified client that discards its token can reconnect as a new player, since there are no accounts and the transport carries no stable peer identity |
 
 In the Play Console:
 

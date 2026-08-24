@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Cleartext policy.
+
+  LAN play opens a plain ws:// socket to another phone on the same Wi-Fi, whose
+  address is handed out by DHCP and discovered over mDNS at runtime. Android's
+  network security config matches <domain> by hostname or IP *literal* and has
+  no CIDR support, so "permit cleartext only for RFC1918" cannot be expressed
+  here — the addresses aren't known until the moment of connection.
+
+  So the base stays permissive, and instead every host this app actually talks
+  to by name is pinned to HTTPS/WSS below. That is the part worth locking down:
+  it guarantees the relay, analytics and billing traffic can never silently
+  downgrade to plaintext, while leaving the LAN socket working.
+
+  Deliberately NOT listed: the ad-serving domains. AdMob creatives are third
+  party content that still references http:// resources, and forbidding
+  cleartext there breaks rendering and costs fill rather than buying security —
+  those requests carry no user data of ours.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+
+    <!-- Our own backend: the room relay and the privacy policy host. -->
+    <domain-config cleartextTrafficPermitted="false">
+        <domain includeSubdomains="true">workers.dev</domain>
+    </domain-config>
+
+    <!-- Firebase / Play endpoints, all HTTPS-only by contract. -->
+    <domain-config cleartextTrafficPermitted="false">
+        <domain includeSubdomains="true">googleapis.com</domain>
+        <domain includeSubdomains="true">app-measurement.com</domain>
+        <domain includeSubdomains="true">firebaseinstallations.googleapis.com</domain>
+        <domain includeSubdomains="true">gstatic.com</domain>
+    </domain-config>
+</network-security-config>

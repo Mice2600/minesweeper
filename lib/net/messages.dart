@@ -20,7 +20,19 @@ import '../game/engine.dart';
 /// removes a player), `CReport`/`SReportAck`/`SModerationNotice` (any player
 /// reports another to the host). Additive only: a v5 peer decodes all five as
 /// [CUnknown]/[SUnknown] and keeps playing, it just can't moderate.
-const protocolVersion = 6;
+///
+/// v7: **not** additive — two changes to existing messages.
+///
+///  * `SGameStarted` no longer carries `seed`. The host is authoritative and
+///    already streams every reveal, so guests never generated the board; all
+///    the field did was let a modified client derive every mine position up
+///    front. The decoder now tolerates its absence.
+///  * `SWelcome` carries `rejoinToken`. The host mints the token itself on a
+///    fresh join instead of accepting whatever the client sends, so a player's
+///    identity is issued rather than self-declared. Previously the token was
+///    only echoed in `SSnapshot`, which the host skips in the lobby — that gap
+///    is why the guest was minting its own.
+const protocolVersion = 7;
 
 // ───────────────────────────────────────── Player ─────────────────────────────
 
@@ -369,6 +381,7 @@ sealed class ServerMessage {
       'welcome' => SWelcome(
           yourId: d['yourId'] as String,
           protocol: d['protocol'] as int,
+          rejoinToken: d['rejoinToken'] as String?,
         ),
       'lobby' => SLobby(
           hostId: d['hostId'] as String,
@@ -381,10 +394,11 @@ sealed class ServerMessage {
               (d['config'] as Map).cast<String, dynamic>()),
           hearts: d['hearts'] as int? ?? 0,
         ),
+      // v6 and earlier also sent `seed`; it is ignored rather than rejected,
+      // so decoding never throws on a legacy frame.
       'gameStarted' => SGameStarted(
           config: GameConfig.fromJson(
               (d['config'] as Map).cast<String, dynamic>()),
-          seed: d['seed'] as int,
           startedAt: d['startedAt'] as int,
         ),
       'revealed' => SRevealed(
@@ -512,14 +526,27 @@ class SHeartsChanged extends ServerMessage {
 }
 
 class SWelcome extends ServerMessage {
-  const SWelcome({required this.yourId, required this.protocol});
+  const SWelcome({
+    required this.yourId,
+    required this.protocol,
+    this.rejoinToken,
+  });
   final String yourId;
   final int protocol;
+
+  /// The host-issued reconnect token for this player (v7+). The guest stores it
+  /// and replays it in [CJoin] on every reconnect. Null when the host is
+  /// re-welcoming a player who already holds one.
+  final String? rejoinToken;
+
   @override
   String get _type => 'welcome';
   @override
-  Map<String, dynamic> _payload() =>
-      {'yourId': yourId, 'protocol': protocol};
+  Map<String, dynamic> _payload() => {
+        'yourId': yourId,
+        'protocol': protocol,
+        if (rejoinToken != null) 'rejoinToken': rejoinToken,
+      };
 }
 
 class SLobby extends ServerMessage {
@@ -547,21 +574,21 @@ class SLobby extends ServerMessage {
       };
 }
 
+/// Match start. Deliberately carries **no board seed** (removed in v7): the
+/// host owns the `GameEngine` and streams every reveal, so a guest has no use
+/// for it — but a modified guest could derive every mine position from it.
 class SGameStarted extends ServerMessage {
   const SGameStarted({
     required this.config,
-    required this.seed,
     required this.startedAt,
   });
   final GameConfig config;
-  final int seed;
   final int startedAt;
   @override
   String get _type => 'gameStarted';
   @override
   Map<String, dynamic> _payload() => {
         'config': config.toJson(),
-        'seed': seed,
         'startedAt': startedAt,
       };
 }

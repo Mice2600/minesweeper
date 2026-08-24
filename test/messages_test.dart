@@ -54,7 +54,6 @@ void main() {
       ),
       const SGameStarted(
         config: GameConfig(width: 9, height: 9, mines: 10),
-        seed: 42,
         startedAt: 1234567890,
       ),
       SRevealed(
@@ -129,6 +128,43 @@ void main() {
       expect(notice.targetId, 'p1');
       expect(notice.reason, 'other');
       expect(notice.details, isNull);
+    });
+
+    test('a legacy v6 gameStarted frame still decodes (seed ignored)', () {
+      // v6 and earlier put the board seed on the wire. Decoding must not
+      // throw on it — the field is dropped, not rejected.
+      final started = ServerMessage.decode(
+        '{"t":"gameStarted","d":{"config":{"width":9,"height":9,"mines":10},'
+        '"seed":42,"startedAt":1234567890}}',
+      ) as SGameStarted;
+      expect(started.startedAt, 1234567890);
+      expect(started.config.width, 9);
+    });
+
+    test('a v6 welcome without rejoinToken decodes to null', () {
+      final welcome = ServerMessage.decode(
+          '{"t":"welcome","d":{"yourId":"abc","protocol":6}}') as SWelcome;
+      expect(welcome.rejoinToken, isNull);
+    });
+  });
+
+  group('v7 protocol changes', () {
+    test('gameStarted no longer puts the board seed on the wire', () {
+      // The whole point of the change: a modified guest must not be able to
+      // derive mine positions from what the host broadcasts.
+      const msg = SGameStarted(
+        config: GameConfig(width: 9, height: 9, mines: 10),
+        startedAt: 1234567890,
+      );
+      expect(msg.encode(), isNot(contains('seed')));
+    });
+
+    test('welcome carries the host-issued rejoin token', () {
+      const msg =
+          SWelcome(yourId: 'abc', protocol: protocolVersion, rejoinToken: 'tok');
+      final decoded = ServerMessage.decode(msg.encode()) as SWelcome;
+      expect(decoded.rejoinToken, 'tok');
+      expect(decoded.yourId, 'abc');
     });
   });
 }

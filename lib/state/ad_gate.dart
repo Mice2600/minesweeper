@@ -1,6 +1,18 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../ads/ads.dart';
 import '../core/prefs.dart';
+
+/// Resolves to whether ads are usable, once the SDK has finished starting up.
+///
+/// [Ads.init] runs after the first frame (see main.dart), so reading
+/// `Ads.instance.available` straight from a `build` can catch a cold start
+/// mid-init and hide ad-dependent UI with nothing to bring it back. Watching
+/// this instead means the screen rebuilds when the answer settles.
+final adsReadyProvider = FutureProvider<bool>((ref) async {
+  await Ads.instance.whenReady;
+  return Ads.instance.available;
+});
 
 /// Tunables for ad pacing.
 const int kRewardedCoins = 250;

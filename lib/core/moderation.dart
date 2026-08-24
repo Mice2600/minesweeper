@@ -27,6 +27,8 @@
 /// Play's user-generated-content policy requires.
 library;
 
+import 'dart:convert';
+
 class Moderation {
   Moderation._();
 
@@ -36,8 +38,31 @@ class Moderation {
   /// Longest chat line the host will re-broadcast.
   static const int maxChatLength = 280;
 
+  /// Largest avatar payload the host will accept, in base64 characters. The
+  /// picker produces a 72×72 q70 JPEG (~2–4 KB), so this is a generous ceiling
+  /// that still bounds what a single join can cost every *other* device in the
+  /// room — each one decodes the blob and holds it in memory.
+  static const int maxAvatarBase64Length = 32 * 1024;
+
   /// Fallback when a name sanitizes down to nothing.
   static const String fallbackName = 'Player';
+
+  /// The reaction set the emoji bar offers, in display order. The host drops
+  /// any `CEmoji` whose code isn't in here, so the reaction channel can't be
+  /// used to push arbitrary text past the chat filter.
+  static const List<String> emojiReactions = [
+    '👍',
+    '❤️',
+    '😂',
+    '😮',
+    '🎉',
+    '🤔',
+    '🚩',
+    '💣',
+  ];
+
+  /// True when [code] is one of the reactions the UI actually offers.
+  static bool isAllowedEmoji(String code) => emojiReactions.contains(code);
 
   // ─── Public API ───────────────────────────────────────────────────────────
 
@@ -79,6 +104,34 @@ class Moderation {
     if (t.isEmpty) return '';
     if (t.length > maxChatLength) t = t.substring(0, maxChatLength);
     return maskProfanity(t);
+  }
+
+  /// Validates a client-supplied avatar. Returns the payload unchanged when it
+  /// is an in-budget JPEG, or `null` for anything the caller should drop —
+  /// oversized, not valid base64, or not a JPEG.
+  ///
+  /// This **rejects rather than truncates**, unlike the text sanitizers above.
+  /// A clipped JPEG is its own decoder hazard, and unlike a name or a chat
+  /// line, this payload is handed to an image decoder on every device in the
+  /// room — so the safe failure mode is "no photo", not "partial photo".
+  static String? sanitizeAvatar(String? raw) {
+    if (raw == null || raw.isEmpty) return null;
+    if (raw.length > maxAvatarBase64Length) return null;
+    try {
+      final bytes = base64Decode(raw);
+      // JPEG start-of-image marker. The picker always encodes JPEG (see
+      // SessionNotifier.pickAndCompressAvatar), so anything else is a client
+      // that went off-script.
+      if (bytes.length < 3 ||
+          bytes[0] != 0xFF ||
+          bytes[1] != 0xD8 ||
+          bytes[2] != 0xFF) {
+        return null;
+      }
+    } catch (_) {
+      return null;
+    }
+    return raw;
   }
 
   /// Removes control characters, zero-width joiners/spaces, and bidi overrides.
